@@ -50,6 +50,11 @@ def collect_log_manifests(logs_dir='logs'):
         except Exception as e:
             groups[('<unreadable>', model_dir)].append((run_dir, {'error': str(e)}))
             continue
+        # Run hoàn tất phải có test_metrics.csv. Code cũ ghi manifest NGAY LÚC BẮT
+        # ĐẦU run, nên các run bị ngắt giữa chừng từ trước vẫn có manifest - chính
+        # là các thư mục dở dang đã bị push lên runs/A và runs/B.
+        if not os.path.exists(os.path.join(os.path.dirname(mf_path), 'test_metrics.csv')):
+            mf = dict(mf, _incomplete=True)
         groups[(mf.get('dataset', '?'), model_dir)].append((run_dir, mf))
     return groups
 
@@ -76,7 +81,15 @@ def check_group(label, items, expect_runs=None):
         problems.append(f"{label}/{n}: thiếu hoặc không đọc được manifest "
                         f"(artifact sinh từ pipeline cũ - phải chạy lại)")
 
-    valid = [(n, mf) for n, mf in items if mf and 'error' not in mf]
+    incomplete = [n for n, mf in items if mf and mf.get('_incomplete')]
+    if incomplete:
+        problems.append(
+            f"{label}: {len(incomplete)} run CHƯA HOÀN TẤT - có manifest nhưng không có "
+            f"test_metrics.csv ({', '.join(sorted(incomplete))}). Checkpoint của chúng mới "
+            f"train dở; chạy lại với --skip_existing trước khi gộp.")
+
+    valid = [(n, mf) for n, mf in items
+             if mf and 'error' not in mf and not mf.get('_incomplete')]
     if not valid:
         return problems
 
@@ -141,9 +154,16 @@ def main():
         status = 'OK' if not probs else 'LỖI'
         print(f"  [{status:4}] {label:<45} {len(items):>2} run, seed={seeds}")
         for t in sorted(tp, key=str):
-            if any(v is not None for v in t):
+            if any(v is not None for v in t[:5]):
                 print(f"         epochs={t[0]} patience={t[1]} warmup={t[2]} "
                       f"lr={t[3]} wd={t[4]}")
+            if t[5]:
+                try:
+                    c = json.loads(t[5])
+                    print(f"         model={c.get('model')} es={c.get('es_protocol')} "
+                          f"es_frac={c.get('es_frac')} quick_check={c.get('quick_check')}")
+                except Exception:
+                    print(f"         model_config={t[5][:80]}")
         all_problems += probs
 
     print()
