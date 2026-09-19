@@ -11,5 +11,10 @@
   "n_windows_val": 565,
   "n_windows_test": 1193,
   "seed": 50,
-  "git_commit": "unknown"
+  "git_commit": "06f8cf0",
+  "epochs": 2,
+  "patience": 5,
+  "warmup_epochs": 1,
+  "lr": 0.001,
+  "weight_decay": 0.0001
 }

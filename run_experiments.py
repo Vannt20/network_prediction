@@ -611,10 +611,22 @@ def run_all_experiments(datasets=None, models=None, epochs=200, patience=30, run
                 # manifest này và RAISE nếu artifact sinh từ phiên bản dữ liệu khác.
                 # Không có bước này thì lỗi B2 (trộn hai pipeline) có thể tái diễn.
                 from features.feature_store import prepare_feature_store as _pfs
-                from features.manifest import save_manifest as _save_mf
+                from features.manifest import (save_manifest as _save_mf,
+                                               with_training_params as _with_tp)
                 *_, _meta_mf = _pfs(ds, seed=seed)
                 os.makedirs(logdir, exist_ok=True)
-                _save_mf(_meta_mf['manifest'], logdir)
+                # Ghi kèm siêu tham số huấn luyện. Không có chúng thì hai nguồn chạy
+                # với --epochs khác nhau vẫn trông như cùng một thí nghiệm khi gộp.
+                # lr/weight_decay lấy trực tiếp từ signature của train_and_eval_model
+                # (nó được gọi không truyền hai tham số này). Đọc bằng inspect thay vì
+                # chép cứng để manifest không nói dối nếu mặc định thay đổi.
+                import inspect as _inspect
+                _sig = _inspect.signature(train_and_eval_model).parameters
+                _save_mf(_with_tp(_meta_mf['manifest'],
+                                  epochs=epochs, patience=patience,
+                                  warmup_epochs=warmup_epochs,
+                                  lr=_sig['lr'].default,
+                                  weight_decay=_sig['weight_decay'].default), logdir)
 
                 metrics = train_and_eval_model(
                     model, train_loader, val_loader, test_loader, scaler=scaler, columns=columns,

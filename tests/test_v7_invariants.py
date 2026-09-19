@@ -2,7 +2,8 @@
 import numpy as np
 import pytest
 
-from features.manifest import Manifest, assert_compatible, PIPELINE_VERSION
+from features.manifest import (Manifest, assert_compatible, PIPELINE_VERSION,
+                               with_training_params, TRAINING_KEYS)
 from Graph_models.pfar import PFAROffline, PFAROnline
 from training.train_pfar import rolling_origin_blocks
 from training.build_oof import oof_plan
@@ -22,6 +23,35 @@ def test_manifest_phat_hien_lech():
     assert_compatible(_mf(), _mf(seed=99))          # seed khác là hợp lệ
     with pytest.raises(RuntimeError):
         assert_compatible(_mf(), _mf(n_windows_test=9596))   # chính là lỗi B2
+
+
+def test_manifest_bat_lech_sieu_tham_so_huan_luyen():
+    """Hai run cùng dữ liệu nhưng khác --epochs KHÔNG phải cùng một thí nghiệm.
+
+    Tình huống có thật: logs/localspatialtcn_data_sdn_seq_60/run_4 chạy 205 epoch
+    trong khi trần của các run khác là 200. Trước khi bổ sung TRAINING_KEYS thì
+    không cơ chế nào phát hiện được, và khi chia việc cho hai tài khoản Kaggle thì
+    đây đúng là lỗi B2 trên một trục khác.
+    """
+    tp = dict(patience=30, warmup_epochs=15, lr=1e-3, weight_decay=1e-4)
+    a = with_training_params(_mf(), epochs=200, **tp)
+    b = with_training_params(_mf(), epochs=300, **tp)
+    with pytest.raises(RuntimeError):
+        assert_compatible(a, b)
+    assert_compatible(a, with_training_params(_mf(), epochs=200, **tp))
+
+
+def test_manifest_bo_qua_sieu_tham_so_khi_mot_ben_thieu():
+    """Manifest của cache không mang siêu tham số huấn luyện -> phải bỏ qua, không raise.
+
+    prepare_feature_store() sinh manifest trước khi biết epochs/patience, nên
+    precompute_cache đối chiếu manifest dữ liệu với manifest run sẽ luôn gặp trường
+    hợp một bên None. Đó là hợp lệ.
+    """
+    full = with_training_params(_mf(), epochs=200, patience=30, warmup_epochs=15,
+                                lr=1e-3, weight_decay=1e-4)
+    assert_compatible(_mf(), full)
+    assert all(getattr(_mf(), k) is None for k in TRAINING_KEYS)
 
 
 def test_pfar_khoi_phuc_he_so():

@@ -31,14 +31,35 @@ class Manifest:
     seed: int
     git_commit: str
 
+    # Siêu tham số huấn luyện. Mặc định None vì prepare_feature_store() không biết
+    # chúng - chúng chỉ được điền ở run_experiments.py ngay trước khi ghi manifest
+    # vào thư mục run (xem with_training_params).
+    epochs: int = None
+    patience: int = None
+    warmup_epochs: int = None
+    lr: float = None
+    weight_decay: float = None
+
 
 # Các trường bắt buộc phải trùng khớp tuyệt đối giữa hai artifact.
 # 'seed' KHÔNG nằm trong danh sách này: các run khác seed là hợp lệ và cần thiết.
+# Khoá mô tả DỮ LIỆU. Luôn được đối chiếu, lệch là raise.
 STRICT_KEYS = [
     "pipeline_version", "dataset", "csv_sha256", "n_steps_after_hygiene",
     "split_train", "split_val", "split_test", "seq_len", "k_lags",
     "n_windows_val", "n_windows_test",
 ]
+
+# Khoá mô tả QUÁ TRÌNH HUẤN LUYỆN. Chỉ đối chiếu khi cả hai phía đều có giá trị,
+# vì manifest do prepare_feature_store() sinh ra (và manifest nhúng trong cache)
+# không mang thông tin này.
+#
+# Vì sao cần: logs/localspatialtcn_data_sdn_seq_60/run_4 có 205 epoch trong khi
+# trần là 200, tức run đó chạy với --epochs khác các run còn lại. Nếu chỉ đối
+# chiếu STRICT_KEYS thì không cách nào phát hiện, và khi chia việc cho hai tài
+# khoản Kaggle thì đây đúng là kịch bản lỗi B2 trên một trục khác: các run trông
+# như cùng một thí nghiệm nhưng thật ra không phải, và std 10 run mất ý nghĩa.
+TRAINING_KEYS = ["epochs", "patience", "warmup_epochs", "lr", "weight_decay"]
 
 
 def sha256_file(path: str) -> str:
@@ -81,6 +102,20 @@ def build_manifest(dataset: str, meta: dict, seed: int = 42) -> Manifest:
     )
 
 
+def with_training_params(m, epochs=None, patience=None, warmup_epochs=None,
+                         lr=None, weight_decay=None):
+    """Trả bản sao manifest có thêm siêu tham số huấn luyện.
+
+    Gọi ngay trước save_manifest() trong vòng huấn luyện, nơi các giá trị này mới
+    được biết.
+    """
+    d = (m if isinstance(m, dict) else asdict(m)).copy()
+    d.update(epochs=epochs, patience=patience, warmup_epochs=warmup_epochs,
+             lr=lr, weight_decay=weight_decay)
+    known = {f.name for f in fields(Manifest)}
+    return Manifest(**{k: v for k, v in d.items() if k in known})
+
+
 def save_manifest(m, dirpath: str) -> None:
     os.makedirs(dirpath, exist_ok=True)
     d = m if isinstance(m, dict) else asdict(m)
@@ -115,4 +150,14 @@ def assert_compatible(a, b) -> None:
                 f"Artifact không tương thích ở trường '{k}' "
                 f"(a={da.get(k)!r}, b={db.get(k)!r}). "
                 f"Hãy xoá logs/ và cache/ rồi chạy lại từ đầu."
+            )
+    # Siêu tham số huấn luyện: chỉ so khi CẢ HAI phía đều có, vì manifest sinh từ
+    # prepare_feature_store() và manifest nhúng trong cache không mang thông tin này.
+    for k in TRAINING_KEYS:
+        va, vb = da.get(k), db.get(k)
+        if va is not None and vb is not None and va != vb:
+            raise RuntimeError(
+                f"Hai run dùng siêu tham số huấn luyện khác nhau ở '{k}' "
+                f"(a={va!r}, b={vb!r}). Các run này KHÔNG phải cùng một thí nghiệm "
+                f"- không được gộp chung để tính trung bình và độ lệch chuẩn."
             )

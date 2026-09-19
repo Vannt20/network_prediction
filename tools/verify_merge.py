@@ -29,7 +29,7 @@ from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from features.manifest import STRICT_KEYS
+from features.manifest import STRICT_KEYS, TRAINING_KEYS
 
 DATASETS = ['sdn', 'geant', 'abilene']
 
@@ -87,6 +87,21 @@ def check_group(label, items, expect_runs=None):
                 problems.append(
                     f"{label}: '{name}' lệch '{ref_name}' ở trường '{k}' "
                     f"({mf.get(k)!r} vs {ref.get(k)!r})")
+        # Siêu tham số huấn luyện: chỉ so khi cả hai phía cùng có giá trị.
+        for k in TRAINING_KEYS:
+            va, vb = mf.get(k), ref.get(k)
+            if va is not None and vb is not None and va != vb:
+                problems.append(
+                    f"{label}: '{name}' lệch '{ref_name}' ở siêu tham số huấn luyện "
+                    f"'{k}' ({va!r} vs {vb!r}) - KHÔNG phải cùng một thí nghiệm")
+
+    # Cảnh báo (không phải lỗi) nếu run thiếu hẳn siêu tham số huấn luyện.
+    no_tp = [n for n, mf in valid if all(mf.get(k) is None for k in TRAINING_KEYS)]
+    if no_tp and len(no_tp) != len(valid):
+        problems.append(
+            f"{label}: {len(no_tp)} run không ghi siêu tham số huấn luyện "
+            f"({', '.join(no_tp[:4])}{'...' if len(no_tp) > 4 else ''}) trong khi "
+            f"các run khác có - chúng sinh từ phiên bản code cũ, phải chạy lại")
 
     # Seed phải ĐÔI MỘT KHÁC NHAU. Hai tài khoản cùng chạy run 0-4 (thay vì chia
     # 0-4 / 5-9) sẽ cho ra các run trùng seed - std tính trên đó là vô nghĩa.
@@ -121,8 +136,14 @@ def main():
         label = f"{model_dir}"
         probs = check_group(label, items, a.expect_runs)
         seeds = sorted(mf.get('seed') for _, mf in items if mf and 'seed' in mf)
+        tp = {tuple(mf.get(k) for k in TRAINING_KEYS)
+              for _, mf in items if mf and 'error' not in mf}
         status = 'OK' if not probs else 'LỖI'
         print(f"  [{status:4}] {label:<45} {len(items):>2} run, seed={seeds}")
+        for t in sorted(tp, key=str):
+            if any(v is not None for v in t):
+                print(f"         epochs={t[0]} patience={t[1]} warmup={t[2]} "
+                      f"lr={t[3]} wd={t[4]}")
         all_problems += probs
 
     print()
