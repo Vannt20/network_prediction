@@ -159,3 +159,28 @@ def test_model_config_khong_phu_thuoc_seed():
     b = model_config_json('xgboost', get_model_instance('xgboost', seed=51), False)
     assert a == b
     assert '"es_protocol": "train_tail_by_time"' in a
+
+
+def test_verify_merge_bat_run_chua_hoan_tat(tmp_path):
+    """Run có manifest nhưng không có test_metrics.csv = run bị ngắt giữa chừng.
+
+    Tình huống có thật: code cũ ghi manifest ngay lúc bắt đầu run, và 7 thư mục dở
+    dang như vậy đã bị push lên runs/A và runs/B. verify_merge phải chặn chúng, nếu
+    không precompute_cache sẽ nạp checkpoint mới train một nửa mà không báo gì.
+    """
+    import json as _json
+    from dataclasses import asdict
+    from tools.verify_merge import collect_log_manifests, check_group
+    mf = asdict(with_training_params(_mf(), epochs=200, patience=30, warmup_epochs=15,
+                                     lr=1e-3, weight_decay=1e-4))
+    base = tmp_path / 'stwaveformer_data_geant_seq_24'
+    for r, done in [(0, True), (1, True), (2, False)]:
+        d = base / f'run_{r}'
+        d.mkdir(parents=True)
+        (d / 'manifest.json').write_text(_json.dumps(dict(mf, seed=42 + r)), encoding='utf-8')
+        if done:
+            (d / 'test_metrics.csv').write_text('mse\n0.001\n', encoding='utf-8')
+    (label_items,) = collect_log_manifests(str(tmp_path)).values()
+    problems = check_group('g', label_items)
+    assert any('CHƯA HOÀN TẤT' in p and 'run_2' in p for p in problems)
+    assert not any('run_0' in p or 'run_1' in p for p in problems)

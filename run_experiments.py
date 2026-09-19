@@ -613,32 +613,46 @@ def run_all_experiments(datasets=None, models=None, epochs=200, patience=30, run
                 )
                 model = build_model(m_name, ds, seq_len, num_flows, num_nodes)
 
-                # I3 - ghi manifest vào thư mục run. precompute_cache.py sẽ đối chiếu
-                # manifest này và RAISE nếu artifact sinh từ phiên bản dữ liệu khác.
-                # Không có bước này thì lỗi B2 (trộn hai pipeline) có thể tái diễn.
+                # I3 - manifest của run. precompute_cache.py đối chiếu manifest này và
+                # RAISE nếu artifact sinh từ phiên bản dữ liệu khác (chống lỗi B2).
                 from features.feature_store import prepare_feature_store as _pfs
                 from features.manifest import (save_manifest as _save_mf,
                                                with_training_params as _with_tp)
                 *_, _meta_mf = _pfs(ds, seed=seed)
                 os.makedirs(logdir, exist_ok=True)
-                # Ghi kèm siêu tham số huấn luyện. Không có chúng thì hai nguồn chạy
-                # với --epochs khác nhau vẫn trông như cùng một thí nghiệm khi gộp.
-                # lr/weight_decay lấy trực tiếp từ signature của train_and_eval_model
-                # (nó được gọi không truyền hai tham số này). Đọc bằng inspect thay vì
-                # chép cứng để manifest không nói dối nếu mặc định thay đổi.
+                # Kèm siêu tham số huấn luyện: không có chúng thì hai nguồn chạy với
+                # --epochs khác nhau vẫn trông như cùng một thí nghiệm khi gộp.
+                # lr/weight_decay đọc từ signature của train_and_eval_model (nó được
+                # gọi không truyền hai tham số này), để manifest không nói dối nếu mặc
+                # định thay đổi.
                 import inspect as _inspect
                 _sig = _inspect.signature(train_and_eval_model).parameters
-                _save_mf(_with_tp(_meta_mf['manifest'],
-                                  epochs=epochs, patience=patience,
-                                  warmup_epochs=warmup_epochs,
-                                  lr=_sig['lr'].default,
-                                  weight_decay=_sig['weight_decay'].default), logdir)
+                _run_mf = _with_tp(_meta_mf['manifest'],
+                                   epochs=epochs, patience=patience,
+                                   warmup_epochs=warmup_epochs,
+                                   lr=_sig['lr'].default,
+                                   weight_decay=_sig['weight_decay'].default)
+
+                # Manifest là DẤU HIỆU HOÀN TẤT: chỉ ghi SAU khi đã train và đánh giá
+                # xong. Trước đây nó được ghi ngay lúc run bắt đầu, nên một run bị ngắt
+                # giữa chừng vẫn có manifest cùng một best_model.pth mới train một nửa
+                # - verify_merge đếm nó là run hợp lệ, precompute_cache nạp nó không
+                # báo gì. Đã xảy ra thật: 7 run dở dang bị push lên runs/A và runs/B.
+                #
+                # Xoá manifest/test_metrics cũ trước khi train: nếu thư mục này là một
+                # run dở dang từ phiên bản trước (manifest ghi sớm) và lần này lại bị
+                # ngắt, manifest cũ sẽ làm nó trông như đã hoàn tất.
+                for _stale in ('manifest.json', 'test_metrics.csv'):
+                    _p = os.path.join(logdir, _stale)
+                    if os.path.exists(_p):
+                        os.remove(_p)
 
                 metrics = train_and_eval_model(
                     model, train_loader, val_loader, test_loader, scaler=scaler, columns=columns,
                     epochs=epochs, patience=patience, logdir=logdir, model_name=m_name, dataset_name=ds,
                     run_id=run_id, total_runs=runs, seed=seed, warmup_epochs=warmup_epochs
                 )
+                _save_mf(_run_mf, logdir)
 
                 metrics['run'] = run_id
                 metrics['seq_len'] = seq_len

@@ -178,6 +178,9 @@ def precompute_dataset_cache(dataset_name, runs=5, champion_name=None, quick_che
         print(f"      [Global] Đã nạp checkpoint: {ckpt_global}", flush=True)
 
         # I3 - đối chiếu manifest của artifact với manifest của dữ liệu hiện tại.
+        if not os.path.exists(os.path.join(global_log_dir, 'test_metrics.csv')):
+            raise FileNotFoundError(
+                f"Run Global chưa hoàn tất: {global_log_dir} không có test_metrics.csv.")
         run_manifest = load_manifest(global_log_dir)
         assert_compatible(meta['manifest'], run_manifest)
 
@@ -214,6 +217,16 @@ def precompute_dataset_cache(dataset_name, runs=5, champion_name=None, quick_che
         columns = meta['columns']
         adj_flow = build_physical_flow_adjacency(ds_key, columns)
         print(f"      [Topo] Đã nạp ma trận kề vật lý cấp độ luồng: shape={adj_flow.shape}", flush=True)
+
+        # Nhánh Local cũng phải khớp phiên bản dữ liệu VÀ đã hoàn tất: manifest giờ
+        # chỉ được ghi sau khi run xong, nên thiếu manifest = run dở dang hoặc run
+        # sinh từ pipeline cũ. Trước đây nhánh này nạp checkpoint mà không kiểm tra gì.
+        local_log_dir = os.path.join(logs_dir, f"localspatialtcn_data_{ds_key}_seq_{seq_len}",
+                                     f"run_{run_id}")
+        if not os.path.exists(os.path.join(local_log_dir, 'test_metrics.csv')):
+            raise FileNotFoundError(
+                f"Run Local chưa hoàn tất: {local_log_dir} không có test_metrics.csv.")
+        assert_compatible(meta['manifest'], load_manifest(local_log_dir))
 
         local_model, local_src = load_local_branch(
             ds_key=ds_key,
