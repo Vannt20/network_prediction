@@ -319,6 +319,7 @@ def train_and_eval_model(model, train_loader, val_loader, test_loader, scaler=No
     print(f"Device: {device_name}", flush=True)
 
     for epoch in range(epochs):
+        epoch_t0 = time.perf_counter()
         model.train()
         train_losses = []
         for batch in train_loader:
@@ -354,6 +355,10 @@ def train_and_eval_model(model, train_loader, val_loader, test_loader, scaler=No
 
         mean_tr_loss = np.mean(train_losses)
         mean_val_loss = np.mean(val_losses)
+        # Thời gian tường minh của epoch (train + validate). Đây là đại lượng duy
+        # nhất dùng được để lập kế hoạch quota GPU. Bảng ngân sách của v6 suy ra
+        # thời gian huấn luyện từ thời gian SUY DIỄN, và sai lệch tới hàng chục lần.
+        epoch_time_s = time.perf_counter() - epoch_t0
 
         # Chỉ báo sống/chết của nhánh Local: nếu mean|delta| ~ 1e-8 thì nhánh đã
         # sụp về persistence và cần dừng ngay, thay vì chạy hết 70 epoch rồi mới
@@ -375,7 +380,8 @@ def train_and_eval_model(model, train_loader, val_loader, test_loader, scaler=No
             'lr': current_lr,
             'train_loss': mean_tr_loss,
             'val_loss': mean_val_loss,
-            'mean_abs_delta': mean_abs_delta
+            'mean_abs_delta': mean_abs_delta,
+            'epoch_time_s': epoch_time_s
         })
 
         # Khoá early stopping trong giai đoạn warmup. Với out_head zero-init, epoch 1
@@ -403,7 +409,7 @@ def train_and_eval_model(model, train_loader, val_loader, test_loader, scaler=No
         tag = f"[{model_name}/{dataset_name.upper()}{run_info}]" if dataset_name else f"[{model_name}{run_info}]"
         delta_str = f" | mean|delta|: {mean_abs_delta:.3e}" if is_local else ""
         wu_str = " [warmup]" if epoch < warmup_epochs else ""
-        print(f"  {tag} Epoch {epoch+1:03d}/{epochs} | LR: {current_lr:.6f} | Train Loss: {mean_tr_loss:.6f} | Val Loss: {mean_val_loss:.6f} (Best: {best_val_loss:.6f}){saved_str}{delta_str} | Patience: {patience_counter}/{patience}{wu_str}", flush=True)
+        print(f"  {tag} Epoch {epoch+1:03d}/{epochs} | {epoch_time_s:6.1f}s | LR: {current_lr:.6f} | Train Loss: {mean_tr_loss:.6f} | Val Loss: {mean_val_loss:.6f} (Best: {best_val_loss:.6f}){saved_str}{delta_str} | Patience: {patience_counter}/{patience}{wu_str}", flush=True)
 
         if patience_counter >= patience:
             print(f"  --> Early stopping triggered at epoch {epoch+1}", flush=True)
