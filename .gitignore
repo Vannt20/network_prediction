@@ -1,0 +1,36 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.pytest_cache/
+
+# --- Thư mục làm việc riêng, không thuộc pipeline ---
+Agents/
+.reports/
+.draft/
+quytrinh/
+*.zip
+
+# --- Artifact NẶNG và TÁI TẠO ĐƯỢC: không đưa lên git ---
+# Dự đoán thô của từng run. v7 đã bỏ cơ chế nạp lại y_pred_data.npy trong
+# precompute_cache.py (chính là nguồn gốc lỗi B2), nên các file này không còn là
+# đầu vào của bất cứ bước nào - chúng chỉ là sản phẩm phụ. Chiếm ~2.3 GB.
+logs/**/*.npy
+
+# Cache dự đoán ba nhánh (~1.3 GB). Tái tạo được trong vài phút trên CPU từ
+# best_model.pth bằng training/precompute_cache.py, nên không cần đồng bộ.
+cache/
+
+# Ma trận OOF (Stage B) - cũng tái tạo được
+*_oof.pt
+
+# --- ĐƯỢC ĐƯA LÊN GIT (ghi ra đây cho rõ, không phải cú pháp ignore) ---
+# data/*.csv            133 MB - phải giống hệt nhau giữa các máy, vì csv_sha256
+#                       nằm trong manifest và quyết định artifact có gộp được không
+# logs/**/best_model.pth  42 MB tổng - đầu vào bắt buộc của precompute_cache
+# logs/**/*.csv           train_metrics, test_metrics
+# logs/**/manifest.json   chốt chặn chống lỗi B2 khi gộp từ nhiều nguồn
+# logs/**/gates.json      kết quả cổng nghiệm thu C1-C8
+# results/*.csv           bảng kết quả
