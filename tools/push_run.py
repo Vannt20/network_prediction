@@ -120,7 +120,12 @@ def push_with_sync(branch):
     file .pth là nhị phân nên rebase qua từng commit dễ vỡ hơn), và nếu vẫn không
     được thì DỪNG với hướng dẫn cụ thể.
     """
-    sh(['git', 'fetch', 'origin'], check=False, quiet=True)
+    # Fetch TƯỜNG MINH đúng nhánh này. `git fetch origin` là không đủ: bản clone
+    # nông (`git clone --depth N`) ngầm bật --single-branch, refspec chỉ còn main,
+    # nên origin/<branch> không bao giờ được tạo và việc đồng bộ bị bỏ qua âm thầm.
+    # Nhánh chưa tồn tại trên remote thì lệnh này lỗi - vô hại, bỏ qua.
+    sh(['git', 'fetch', 'origin', f'+refs/heads/{branch}:refs/remotes/origin/{branch}'],
+       check=False, quiet=True)
     remote_ref = f'origin/{branch}'
     has_remote = sh(['git', 'rev-parse', '--verify', remote_ref],
                     check=False, quiet=True).returncode == 0
