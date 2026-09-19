@@ -62,18 +62,6 @@ def create_sliding_windows(traffic_norm, tod_arr, dow_arr, seq_len):
     return torch.tensor(np.array(xs), dtype=torch.float32), torch.tensor(np.array(ys), dtype=torch.float32)
 
 
-def _fit_args(X_tr, y_tr, es_frac=0.15):
-    """Cắt 15% cuối của Train làm tập early stopping (Train-ES).
-
-    I5 / lỗi B4: trước đây nhánh ML early-stop trên X_va_tab[:1000], tức 1000 dòng
-    đầu của chính tập Validation mà bộ gộp dùng để khớp trọng số. Nhánh ML vì thế
-    "đẹp giả" đúng ở nơi ra quyết định.
-    """
-    n = len(X_tr)
-    cut = max(1, int(n * (1.0 - es_frac)))
-    return X_tr[:cut], y_tr[:cut], X_tr[cut:], y_tr[cut:]
-
-
 def compute_x_last(traffic_norm, seq_len):
     """Giá trị bước t-1 tương ứng với từng cửa sổ trượt -> baseline persistence.
 
@@ -259,34 +247,29 @@ def precompute_dataset_cache(dataset_name, runs=5, champion_name=None, quick_che
         ml_model_file = os.path.join(ml_log_dir, 'model.bin')
         ml_pred_file = os.path.join(ml_log_dir, 'y_pred_data.npy')
 
-        if champion_name == 'lightgbm':
-            ml_inst = LGBMBaseline(n_estimators=20 if quick_check else 1000, random_state=42 + run_id)
-        elif champion_name == 'xgboost':
-            ml_inst = XGBoostBaseline(n_estimators=20 if quick_check else 1000, random_state=42 + run_id)
-        elif champion_name == 'catboost':
-            ml_inst = CatBoostBaseline(iterations=20 if quick_check else 1000, random_seed=42 + run_id)
-        elif champion_name == 'extra_trees':
-            ml_inst = ExtraTreesBaseline(n_estimators=10 if quick_check else 200, random_state=42 + run_id)
-        else:
-            # Mặc định an toàn: LightGBM (tốc độ cao nhất, tiết kiệm RAM)
-            ml_inst = LGBMBaseline(n_estimators=20 if quick_check else 1000, random_state=42 + run_id)
+        ml_classes = {'lightgbm': LGBMBaseline, 'xgboost': XGBoostBaseline,
+                      'catboost': CatBoostBaseline, 'extra_trees': ExtraTreesBaseline}
+        if champion_name not in ml_classes:
+            # Trước đây rơi về LightGBM trong im lặng - cùng loại bẫy với
+            # get_champion_name(): thay nhánh ML của mô hình đề xuất mà không báo gì.
+            raise ValueError(f"Champion ML không hợp lệ: {champion_name!r}. "
+                             f"Chỉ nhận {sorted(ml_classes)}.")
 
-        if os.path.exists(ml_model_file):
-            try:
-                ml_inst.load(ml_model_file)
-                print(f"      [ML] Đã nạp mô hình Champion: {ml_model_file}", flush=True)
-            except Exception as e:
-                print(f"      [ML] Lỗi nạp model ({e}), huấn luyện lại...", flush=True)
-                sample_tr = min(5000, len(X_tr_tab)) if quick_check else len(X_tr_tab)
-                ml_inst.fit(*_fit_args(X_tr_tab[:sample_tr], y_tr_tab[:sample_tr]))
-        else:
-            print(f"      [ML] Huấn luyện Champion {champion_name.upper()}...", flush=True)
-            sample_tr = min(5000, len(X_tr_tab)) if quick_check else len(X_tr_tab)
-            ml_inst.fit(*_fit_args(X_tr_tab[:sample_tr], y_tr_tab[:sample_tr]))
-            try:
-                ml_inst.save(ml_model_file)
-            except Exception:
-                pass
+        # Mô hình ML PHẢI do baselines_ml/run_ml_baselines.py sinh ra. Trước đây nếu
+        # thiếu model.bin (hoặc nạp lỗi) thì hàm này tự huấn luyện một mô hình mới ngay
+        # tại đây: mô hình đó không có manifest, không nằm trong bảng kết quả ML, và đi
+        # vòng qua toàn bộ quy trình kiểm soát - nên giờ dừng hẳn, giống như với
+        # checkpoint của nhánh Global.
+        if not os.path.exists(ml_model_file):
+            raise FileNotFoundError(
+                f"Không có {ml_model_file}. Hãy chạy nhánh ML trước: "
+                f"python -m baselines_ml.run_ml_baselines --datasets {ds_key} --runs {runs}")
+        # I3 - mô hình ML cũng phải khớp phiên bản dữ liệu. Run sinh ra trước khi sửa
+        # lỗi B4 không có manifest -> load_manifest raise, buộc phải chạy lại.
+        assert_compatible(meta['manifest'], load_manifest(ml_log_dir))
+        ml_inst = ml_classes[champion_name]()
+        ml_inst.load(ml_model_file)
+        print(f"      [ML] Đã nạp mô hình Champion: {ml_model_file}", flush=True)
 
         # Dự đoán ML trên Validation và Test
         val_ml_preds = ml_inst.predict(X_va_tab)

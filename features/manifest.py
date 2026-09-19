@@ -39,6 +39,10 @@ class Manifest:
     warmup_epochs: int = None
     lr: float = None
     weight_decay: float = None
+    # Cấu hình nhánh ML dạng JSON (mô hình, giao thức early stopping, siêu tham số).
+    # Nhánh học sâu để None. Seed/số luồng CPU bị loại khỏi chuỗi này vì chúng khác
+    # nhau hợp lệ giữa các run.
+    model_config: str = None
 
 
 # Các trường bắt buộc phải trùng khớp tuyệt đối giữa hai artifact.
@@ -59,7 +63,7 @@ STRICT_KEYS = [
 # chiếu STRICT_KEYS thì không cách nào phát hiện, và khi chia việc cho hai tài
 # khoản Kaggle thì đây đúng là kịch bản lỗi B2 trên một trục khác: các run trông
 # như cùng một thí nghiệm nhưng thật ra không phải, và std 10 run mất ý nghĩa.
-TRAINING_KEYS = ["epochs", "patience", "warmup_epochs", "lr", "weight_decay"]
+TRAINING_KEYS = ["epochs", "patience", "warmup_epochs", "lr", "weight_decay", "model_config"]
 
 
 def sha256_file(path: str) -> str:
@@ -103,7 +107,7 @@ def build_manifest(dataset: str, meta: dict, seed: int = 42) -> Manifest:
 
 
 def with_training_params(m, epochs=None, patience=None, warmup_epochs=None,
-                         lr=None, weight_decay=None):
+                         lr=None, weight_decay=None, model_config=None, seed=None):
     """Trả bản sao manifest có thêm siêu tham số huấn luyện.
 
     Gọi ngay trước save_manifest() trong vòng huấn luyện, nơi các giá trị này mới
@@ -111,7 +115,9 @@ def with_training_params(m, epochs=None, patience=None, warmup_epochs=None,
     """
     d = (m if isinstance(m, dict) else asdict(m)).copy()
     d.update(epochs=epochs, patience=patience, warmup_epochs=warmup_epochs,
-             lr=lr, weight_decay=weight_decay)
+             lr=lr, weight_decay=weight_decay, model_config=model_config)
+    if seed is not None:
+        d['seed'] = int(seed)
     known = {f.name for f in fields(Manifest)}
     return Manifest(**{k: v for k, v in d.items() if k in known})
 

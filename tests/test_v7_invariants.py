@@ -108,3 +108,54 @@ def test_convex_bi_chan_boi_nhanh_manh_nhat():
     best_single = min(mse(P[..., k]) for k in range(3))
     affine = mse(PFAROffline(1e-8).fit(P, y).predict(P))
     assert affine < best_single
+
+
+# ---------------------------------------------------------------------------
+# Nhánh ML: sửa crash XGBoost + lỗi B4 + manifest
+# ---------------------------------------------------------------------------
+
+def test_train_es_cat_dung_ranh_gioi_thoi_gian():
+    """Train-ES là đuôi THỜI GIAN và không chia đôi một bước thời gian.
+
+    Ma trận tabular xếp theo thời gian trước (hàng t*N + f). Cắt theo số hàng có
+    thể đẩy một phần luồng của cùng một bước sang tập early stopping.
+    """
+    from baselines_ml.es_split import split_train_es
+    N, T = 7, 100
+    X = np.repeat(np.arange(T), N)[:, None].astype(float)   # cột 0 = chỉ số thời gian
+    y = X[:, 0].copy()
+    Xf, yf, Xe, ye = split_train_es(X, y, N, es_frac=0.15)
+    assert len(Xf) % N == 0 and len(Xe) % N == 0
+    assert Xf[:, 0].max() < Xe[:, 0].min(), "tập early stopping phải nằm SAU tập khớp"
+    assert set(Xf[:, 0]).isdisjoint(set(Xe[:, 0])), "một bước thời gian bị chia đôi"
+    with pytest.raises(ValueError):
+        split_train_es(X[:-1], y[:-1], N)      # số hàng không chia hết cho N
+
+
+@pytest.mark.parametrize("m_key", ["lightgbm", "catboost", "xgboost"])
+def test_moi_mo_hinh_ml_nhan_fit_theo_vi_tri(m_key, tmp_path, monkeypatch):
+    """run_ml_baselines gọi fit(X_fit, y_fit, X_es, y_es) theo VỊ TRÍ.
+
+    Trước đây gọi fit(..., X_val=..., y_val=...) trong khi XGBoostBaseline.fit đã
+    đổi thành (X_es, y_es) -> TypeError, script sập ngay ở XGBoost, sau khi đã chạy
+    xong LightGBM và CatBoost. Test này bắt lỗi đó.
+    """
+    pytest.importorskip(m_key)
+    monkeypatch.chdir(tmp_path)                # CatBoost tự ghi catboost_info/ vào cwd
+    from baselines_ml.run_ml_baselines import get_model_instance
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(300, 4)).astype(np.float32)
+    y = (X[:, 0] * 2).astype(np.float32)
+    m = get_model_instance(m_key, seed=1, quick_check=True)
+    m.fit(X[:240], y[:240], X[240:], y[240:])
+    assert m.predict(X).shape == (300,)
+
+
+def test_model_config_khong_phu_thuoc_seed():
+    """Hai run khác seed phải có cùng model_config, nếu không verify_merge sẽ báo
+    lệch giả giữa các run hợp lệ."""
+    from baselines_ml.run_ml_baselines import get_model_instance, model_config_json
+    a = model_config_json('xgboost', get_model_instance('xgboost', seed=42), False)
+    b = model_config_json('xgboost', get_model_instance('xgboost', seed=51), False)
+    assert a == b
+    assert '"es_protocol": "train_tail_by_time"' in a

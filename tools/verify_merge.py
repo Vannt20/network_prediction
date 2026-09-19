@@ -141,9 +141,16 @@ def main():
         status = 'OK' if not probs else 'LỖI'
         print(f"  [{status:4}] {label:<45} {len(items):>2} run, seed={seeds}")
         for t in sorted(tp, key=str):
-            if any(v is not None for v in t):
+            if any(v is not None for v in t[:5]):
                 print(f"         epochs={t[0]} patience={t[1]} warmup={t[2]} "
                       f"lr={t[3]} wd={t[4]}")
+            if t[5]:
+                try:
+                    c = json.loads(t[5])
+                    print(f"         model={c.get('model')} es={c.get('es_protocol')} "
+                          f"es_frac={c.get('es_frac')} quick_check={c.get('quick_check')}")
+                except Exception:
+                    print(f"         model_config={t[5][:80]}")
         all_problems += probs
 
     print()
