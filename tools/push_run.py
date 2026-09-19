@@ -45,10 +45,25 @@ def sh(args, check=True, quiet=False):
     return r
 
 
-def count_runs():
-    """Đếm số run có manifest, để đưa vào thông điệp commit."""
+def completed_run_dirs(logs_dir='logs'):
+    """Các thư mục run ĐÃ HOÀN TẤT: có cả manifest.json lẫn test_metrics.csv.
+
+    Từ commit 815ccae, manifest chỉ được ghi sau khi run train và đánh giá xong,
+    nên đây là tín hiệu hoàn tất đáng tin. Kiểm tra thêm test_metrics.csv để loại
+    các thư mục dở dang sinh ra từ phiên bản cũ (manifest ghi ngay lúc bắt đầu).
+    """
     import glob
-    return len(glob.glob(os.path.join('logs', '*', 'run_*', 'manifest.json')))
+    out = []
+    for mf in glob.glob(os.path.join(logs_dir, '*', 'run_*', 'manifest.json')):
+        d = os.path.dirname(mf)
+        if os.path.exists(os.path.join(d, 'test_metrics.csv')):
+            out.append(d.replace(os.sep, '/'))
+    return sorted(out)
+
+
+def count_runs():
+    """Đếm số run đã hoàn tất, để đưa vào thông điệp commit."""
+    return len(completed_run_dirs())
 
 
 def main():
@@ -60,6 +75,11 @@ def main():
                          "nếu không thì nhánh hiện tại.")
     ap.add_argument('--verify', action='store_true',
                     help="Chạy tools/verify_merge.py trước khi commit; dừng nếu lỗi.")
+    ap.add_argument('--only_completed', action='store_true',
+                    help="Chỉ commit các thư mục run đã hoàn tất (có manifest + "
+                         "test_metrics). Dùng khi push trong lúc vẫn còn run đang train: "
+                         "checkpoint dở dang của run khác không bị đưa lên. Ở chế độ này "
+                         "KHÔNG BAO GIỜ chuyển nhánh.")
     a = ap.parse_args()
 
     if not os.path.isdir('.git'):
@@ -79,6 +99,13 @@ def main():
     if branch:
         cur = sh(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], quiet=True).stdout.strip()
         if cur != branch:
+            if a.only_completed:
+                # Chế độ này được gọi TRONG LÚC các tiến trình khác đang train.
+                # Chuyển nhánh lúc đó sẽ thay đổi file dưới chân chúng.
+                print(f"[DỪNG] Đang ở nhánh '{cur}', không phải '{branch}'. Ở chế độ "
+                      f"--only_completed không được chuyển nhánh. Hãy checkout "
+                      f"'{branch}' trước khi bắt đầu train (cell 3 của notebook).")
+                return 1
             # Tạo nhánh nếu chưa có, ngược lại chuyển sang
             if sh(['git', 'rev-parse', '--verify', branch],
                   check=False, quiet=True).returncode != 0:
@@ -86,19 +113,30 @@ def main():
             else:
                 sh(['git', 'checkout', branch])
 
-    sh(['git', 'add', '-A'])
+    if a.only_completed:
+        dirs = completed_run_dirs()
+        if not dirs:
+            print("Chưa có run nào hoàn tất.")
+            return 0
+        sh(['git', 'add', '--'] + dirs)
+    else:
+        sh(['git', 'add', '-A'])
 
-    st = sh(['git', 'status', '--porcelain'], quiet=True).stdout.strip()
-    if not st:
-        print("Không có thay đổi nào để commit.")
-        return 0
-    print(f"{len(st.splitlines())} file thay đổi.")
-
-    who = f"[{a.account}] " if a.account else ""
-    note = a.note or "artifact training"
-    msg = f"{who}{note} ({count_runs()} run có manifest, {time.strftime('%Y-%m-%d %H:%M')})"
-    sh(['git', 'commit', '-m', msg])
-    print(f"Đã commit: {msg}")
+    # Xét phần ĐÃ STAGE, không xét `git status`: ở chế độ --only_completed, working
+    # tree luôn còn file chưa stage (checkpoint của run đang train dở).
+    staged = sh(['git', 'diff', '--cached', '--name-only'], quiet=True).stdout.split()
+    if staged:
+        print(f"{len(staged)} file thay đổi.")
+        who = f"[{a.account}] " if a.account else ""
+        note = a.note or "artifact training"
+        msg = f"{who}{note} ({count_runs()} run hoàn tất, {time.strftime('%Y-%m-%d %H:%M')})"
+        sh(['git', 'commit', '-m', msg])
+        print(f"Đã commit: {msg}")
+    else:
+        # KHÔNG thoát ở đây. Nếu một lần push trước thất bại (mạng, token...), commit
+        # của nó vẫn nằm ở máy; thoát sớm thì commit đó kẹt lại và mất khi session
+        # Kaggle kết thúc. Push một nhánh đã đồng bộ là thao tác vô hại.
+        print("Không có thay đổi mới - vẫn đẩy các commit còn tồn (nếu có).")
 
     if not sh(['git', 'remote'], quiet=True).stdout.strip():
         print("Chưa cấu hình remote - đã commit cục bộ, chưa push.")

@@ -72,13 +72,59 @@ def last_line(path, tail_bytes=8192):
     return lines[-1] if lines else ''
 
 
-def monitor(running, every):
+class AutoPusher:
+    """Commit + push ngay khi có run mới hoàn tất.
+
+    Vì sao: notebook trước đây chỉ push sau CẢ MỘT mô hình (5 run, ~8 giờ với
+    Géant/STWaveFormer). Session bị ngắt ở giữa thì mọi run đã xong từ lần push
+    trước đều mất, và lần sau phải train lại từ đầu.
+
+    Dựa trên tín hiệu hoàn tất: manifest.json chỉ được ghi SAU khi run train và
+    đánh giá xong (commit 815ccae). Chỉ tiến trình cha gọi git - hai tiến trình
+    train không bao giờ đụng vào git, nên không có hai lệnh git tranh nhau
+    .git/index.lock. Push thất bại không làm dừng training: commit vẫn nằm ở máy,
+    lần sau thử lại.
+    """
+
+    def __init__(self, account, note_prefix):
+        from tools.push_run import completed_run_dirs
+        self._completed = completed_run_dirs
+        self.account = account
+        self.note_prefix = note_prefix
+        # Run đã hoàn tất TRƯỚC khi bắt đầu (session trước, --skip_existing) thì
+        # không cần push lại.
+        self.pushed = set(completed_run_dirs())
+
+    def poll(self, reason='auto'):
+        new = sorted(set(self._completed()) - self.pushed)
+        if not new:
+            return
+        names = ', '.join(d.split('/')[-2].split('_data_')[0] + '/' + d.split('/')[-1]
+                          for d in new)
+        print(f"  [PUSH] {len(new)} run mới hoàn tất ({names}) -> commit + push...", flush=True)
+        r = subprocess.run(
+            [sys.executable, 'tools/push_run.py', '--account', self.account,
+             '--only_completed', '--note', f"{self.note_prefix} {reason}: {names}"],
+            capture_output=True, text=True, encoding='utf-8', errors='replace')
+        if r.returncode == 0:
+            self.pushed.update(new)
+            print(f"  [PUSH] OK", flush=True)
+        else:
+            tail = (r.stdout + r.stderr).strip().splitlines()[-6:]
+            print(f"  [PUSH] THẤT BẠI (mã {r.returncode}) - training vẫn chạy tiếp, "
+                  f"sẽ thử lại ở lần kiểm tra sau:", flush=True)
+            for line in tail:
+                print(f"         {line}", flush=True)
+
+
+def monitor(running, every, pusher=None):
     """In tiến độ định kỳ cho tới khi mọi tiến trình kết thúc.
 
     stdout của từng tiến trình được ghi vào file riêng để hai luồng không trộn
     vào nhau. Nhưng nếu CHỈ ghi file thì trên Kaggle bạn ngồi nhìn màn hình trống
     hàng giờ, không biết tiến trình còn sống hay đã treo - và khi session bị ngắt
-    cũng không biết nó dừng ở đâu. Hàm này in dòng mới nhất của mỗi GPU, có nhãn.
+    cũng không biết nó dừng ở đâu. Hàm này in dòng mới nhất của mỗi GPU, có nhãn,
+    và nếu có `pusher` thì push ngay các run vừa hoàn tất.
 
     `running`: danh sách (gpu_id, Popen, file_handle, run_ids, log_path).
     """
@@ -90,6 +136,8 @@ def monitor(running, every):
             if line and line != last_shown.get(g):
                 last_shown[g] = line
                 print(f"  [GPU{g}] {line}", flush=True)
+        if pusher is not None:
+            pusher.poll()
 
 
 def main():
@@ -102,10 +150,16 @@ def main():
     ap.add_argument('--log_dir', default='logs/_multigpu',
                     help="Nơi ghi stdout của từng tiến trình")
     ap.add_argument('--extra', default='',
-                    help="Tham số truyền thẳng cho run_experiments.py, "
-                         "ví dụ \"--epochs 300 --patience 30\"")
+                    help="Tham số truyền thẳng cho run_experiments.py. PHẢI viết dạng "
+                         "có dấu bằng: --extra=\"--epochs 300 --patience 30\". Viết "
+                         "--extra \"--epochs 300\" (dấu cách) thì argparse hiểu "
+                         "'--epochs' là tuỳ chọn của chính script này và báo lỗi.")
     ap.add_argument('--progress_every', type=int, default=60,
                     help="Giây giữa hai lần in tiến độ. 0 = tắt, chỉ ghi file.")
+    ap.add_argument('--auto_push', default=None, metavar='ACCOUNT',
+                    help="Nhãn tài khoản (A/B). Bật thì mỗi run vừa hoàn tất được "
+                         "commit + push ngay lên runs/<ACCOUNT>. Phải đang ở đúng "
+                         "nhánh runs/<ACCOUNT> trước khi chạy.")
     a = ap.parse_args()
 
     run_ids = [int(x) for x in a.run_ids.split(',')]
@@ -146,10 +200,35 @@ def main():
         running.append((g, subprocess.Popen(cmd, env=env, stdout=out,
                                             stderr=subprocess.STDOUT), out, ids, out_path))
 
-    if a.progress_every > 0 and running:
-        print(f"\nTiến độ (cập nhật mỗi {a.progress_every}s; "
-              f"log đầy đủ trong {a.log_dir}):\n", flush=True)
-        monitor(running, a.progress_every)
+    pusher = AutoPusher(a.auto_push, f"{a.dataset} {a.model}") if a.auto_push else None
+    every = a.progress_every if a.progress_every > 0 else 60
+    if running:
+        print(f"\nTiến độ (cập nhật mỗi {every}s; log đầy đủ trong {a.log_dir}"
+              f"{'; tự push từng run lên runs/' + a.auto_push if pusher else ''}):\n",
+              flush=True)
+        try:
+            monitor(running, every, pusher)
+        except KeyboardInterrupt:
+            # Bạn bấm Interrupt: dừng các tiến trình train, nhưng TRƯỚC KHI thoát thì
+            # push các run đã hoàn tất - để không phải nhớ chạy push_run bằng tay.
+            print("\n[INTERRUPT] Dừng các tiến trình train...", flush=True)
+            for _g, p, _f, _ids, _lp in running:
+                if p.poll() is None:
+                    p.terminate()
+            for _g, p, _f, _ids, _lp in running:
+                try:
+                    p.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+            if pusher is not None:
+                pusher.poll(reason='interrupt')
+            print("[INTERRUPT] Run đang dở không có manifest nên sẽ được train lại từ "
+                  "đầu ở lần chạy sau (--skip_existing).", flush=True)
+            return 130
+
+    # Lần kiểm tra cuối: run hoàn tất giữa lần kiểm tra cuối cùng và lúc thoát.
+    if pusher is not None:
+        pusher.poll(reason='final')
 
     failed = []
     for g, p, out, ids, log_path in running:
