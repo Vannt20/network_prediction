@@ -28,12 +28,12 @@ dùng seed 49 bất kể nó chạy ở máy nào. Đây là điều kiện cầ
 
 ## 2. Thiết lập git (làm một lần, trên máy local)
 
+Đã thực hiện xong phần cục bộ: `git init`, commit đầu tiên (603 file), nhánh `main`,
+remote trỏ về `https://github.com/Vannt20/network_prediction.git`.
+
+Còn lại đúng một lệnh, cần chạy từ máy local (nơi có sẵn thông tin đăng nhập GitHub):
+
 ```bash
-git init
-git add -A
-git commit -m "v7 pipeline"
-git branch -M main
-git remote add origin https://github.com/<user>/<repo>.git
 git push -u origin main
 ```
 
@@ -52,28 +52,85 @@ hạn cứng 100 MB — push được, chỉ bị cảnh báo. Nếu muốn repo
 lên Kaggle Dataset và share cho cả hai account; đổi lại phải tự đảm bảo hai bên
 dùng đúng một bản, thứ mà git làm sẵn cho bạn.
 
-## 3. Notebook Kaggle (giống nhau cho cả hai account, chỉ khác `ACCOUNT`)
+## 3. Xác thực git trên Kaggle — không cần tài khoản GitHub trên Kaggle
+
+Điểm hay gây nhầm: **tài khoản Kaggle không liên quan gì đến tài khoản GitHub.**
+Kaggle chỉ là một máy Linux chạy `git`. Thứ duy nhất nó cần là **một Personal
+Access Token (PAT)** của chủ repo (`Vannt20`). Cả hai tài khoản Kaggle dùng
+**chung một PAT** để push vào **cùng một repo**, chỉ khác nhánh.
+
+`git config user.name` / `user.email` chỉ là metadata ghi vào commit — điền gì
+cũng được, không cần là tài khoản thật, không ảnh hưởng quyền push.
+
+### Tạo PAT (làm một lần trên GitHub của Vannt20)
+
+Settings → Developer settings → Personal access tokens → **Fine-grained tokens**:
+
+| Trường | Giá trị |
+|---|---|
+| Repository access | Only select repositories → `Vannt20/network_prediction` |
+| Permissions | Repository permissions → **Contents: Read and write** |
+| Expiration | 30–90 ngày (đủ cho đợt thực nghiệm) |
+
+Chỉ cấp đúng một repo và đúng một quyền. Nếu token lộ, thiệt hại giới hạn ở repo
+này thay vì toàn bộ tài khoản.
+
+### Nạp PAT vào Kaggle Secrets (làm ở **mỗi** tài khoản Kaggle)
+
+Secrets là **riêng theo từng tài khoản**, nên phải thêm hai lần — một lần ở
+account A, một lần ở account B, cùng giá trị.
+
+Trong notebook: **Add-ons → Secrets → Add a new secret**, Label = `GH_TOKEN`,
+Value = chuỗi PAT. Rồi bật nút *Attach* cho notebook đang mở.
+
+> **Notebook phải để Private.** Notebook public không làm lộ secret (Kaggle không
+> đưa giá trị secret cho người khác), nhưng *output* của notebook thì công khai —
+> và nếu token lỡ bị in ra màn hình thì nó nằm trong output. Để Private là cách
+> chắc chắn.
+
+## 4. Notebook Kaggle (giống nhau cho cả hai account, chỉ khác `ACCOUNT`)
 
 ```python
 # ==== CELL 1: cấu hình ====
 ACCOUNT  = "A"                      # Account B đổi thành "B"
 RUN_IDS  = "0,1,2,3,4"              # Account B: "5,6,7,8,9"
 DATASET  = "sdn"                    # chạy lần lượt: sdn -> geant -> abilene
-REPO     = "https://<TOKEN>@github.com/<user>/<repo>.git"   # token trong Kaggle Secrets
+REPO_URL = "https://github.com/Vannt20/network_prediction.git"
 
-# ==== CELL 2: lấy code ====
-!git clone --depth 50 $REPO /kaggle/working/repo
+# ==== CELL 2: xác thực, KHÔNG để token lọt vào /kaggle/working ====
+from kaggle_secrets import UserSecretsClient
+import subprocess, os
+
+TOKEN = UserSecretsClient().get_secret("GH_TOKEN")     # không print biến này
+
+# Ghi credential ra /tmp chứ KHÔNG phải /kaggle/working: mọi thứ trong
+# /kaggle/working đều được lưu thành output của notebook. Nếu nhúng token vào URL
+# remote thì nó nằm trong .git/config và đi thẳng vào output -> lộ token.
+with open("/tmp/.git-credentials", "w") as f:
+    f.write(f"https://x-access-token:{TOKEN}@github.com\n")
+os.chmod("/tmp/.git-credentials", 0o600)
+
+subprocess.run(["git", "config", "--global", "credential.helper",
+                "store --file=/tmp/.git-credentials"], check=True)
+subprocess.run(["git", "config", "--global", "user.email",
+                f"kaggle-{ACCOUNT}@local"], check=True)
+subprocess.run(["git", "config", "--global", "user.name",
+                f"kaggle-{ACCOUNT}"], check=True)
+print("Đã cấu hình xác thực git.")   # không in TOKEN
+
+# ==== CELL 3: lấy code ====
+# URL remote là URL sạch, không chứa token -> an toàn khi lưu vào output.
+!git clone --depth 50 $REPO_URL /kaggle/working/repo
 %cd /kaggle/working/repo
 !git checkout -B runs/$ACCOUNT
-!git config user.email "you@example.com" && git config user.name "kaggle-$ACCOUNT"
 !pip install -q -r requirements.txt
 
-# ==== CELL 3: HIỆU CHỈNH TRƯỚC — bắt buộc, ~10 phút ====
+# ==== CELL 4: HIỆU CHỈNH TRƯỚC — bắt buộc, ~10 phút ====
 # Ước lượng thời gian hiện đang bất định 25-50 lần giữa hai cách tính.
 # Chạy 3 epoch, đo, rồi mới quyết định phạm vi.
 !python run_experiments.py --dataset abilene --model STWaveFormer --runs 1 --epochs 3
 
-# ==== CELL 4: training ====
+# ==== CELL 5: training ====
 !python run_experiments.py --dataset $DATASET --model STWaveFormer \
     --run_ids $RUN_IDS --skip_existing
 !python tools/push_run.py --account $ACCOUNT --note "$DATASET STWaveFormer $RUN_IDS"
@@ -94,7 +151,7 @@ Bỏ qua mù chính là cách lỗi B2 lọt vào bộ kết quả cuối.
 **Push sau mỗi model, không phải cuối session.** Mất nhiều nhất một model thay vì
 cả session.
 
-## 4. Gộp kết quả (trên máy local, CPU)
+## 5. Gộp kết quả (trên máy local, CPU)
 
 ```bash
 git fetch origin
@@ -119,7 +176,23 @@ python training/precompute_cache.py --datasets all --runs 10
 python run_pipeline_v7.py --stage combine --dataset all --runs 10
 ```
 
-## 5. Thứ tự dataset
+## 6. Nếu không muốn đặt token lên Kaggle
+
+Hoàn toàn chạy được mà không cần git trên Kaggle:
+
+1. Notebook chỉ clone (repo public thì clone không cần xác thực) và training.
+2. Kết quả nằm trong `/kaggle/working/repo/logs/` — Kaggle tự lưu thành **Notebook
+   Output**. Nén cho gọn trước khi session kết thúc:
+   ```python
+   !cd /kaggle/working/repo && tar czf /kaggle/working/logs_$ACCOUNT.tgz        $(find logs -name '*.pth' -o -name '*.csv' -o -name 'manifest.json' -o -name 'gates.json')
+   ```
+   Chỉ khoảng 43 MB, vì đã loại `*.npy`.
+3. Tải file `.tgz` về máy, giải nén đè lên `logs/`, rồi push từ máy local.
+
+Đổi lại: phải thao tác tay sau mỗi session, và mất tính "push ngay khi xong một
+run". Với Kaggle hay bị ngắt ở giờ thứ 11 thì đây là nhược điểm thật.
+
+## 7. Thứ tự dataset
 
 SDN → Géant → Abilene. SDN nhẹ nhất nên nếu có gì sai trong cấu hình thì phát hiện
 sớm; Abilene nặng nhất nên để sau cùng, và nếu cháy quota thì vẫn còn hai tập có
