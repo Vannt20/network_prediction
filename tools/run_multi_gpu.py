@@ -3,6 +3,15 @@ Chạy nhiều run song song, mỗi GPU một tiến trình. Dành cho Kaggle "G
 
     python tools/run_multi_gpu.py --dataset sdn --model STWaveFormer --run_ids 0,1,2,3,4
 
+Kết hợp với việc chia run giữa hai tài khoản Kaggle: đây là mức chia THỨ HAI, lồng
+bên trong mức thứ nhất. Mỗi tài khoản chỉ truyền phần run của mình:
+
+    Account A  --run_ids 0,1,2,3,4  ->  GPU0:[0,2,4]  GPU1:[1,3]
+    Account B  --run_ids 5,6,7,8,9  ->  GPU0:[5,7,9]  GPU1:[6,8]
+
+Tổng cộng 4 luồng GPU, phân bổ [3,2,3,2], mỗi run xuất hiện đúng một lần. Luồng
+dài nhất là 3 run - tối ưu, vì ceil(10/4) = 3.
+
 Vì sao KHÔNG dùng DataParallel/DDP:
 
 1. Bài toán ở đây là 10 run ĐỘC LẬP (khác seed), tức song song hoàn hảo. Chia run
