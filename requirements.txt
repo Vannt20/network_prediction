@@ -3,17 +3,21 @@
 # Luận văn ThS - Nghiên cứu phương pháp dự báo lưu lượng mạng
 # ==============================================================================
 
-# Core Deep Learning Frameworks
+# Core Deep Learning Framework
 torch>=2.0.0
-tensorflow>=2.15.0
-keras>=3.0.0
-tensorboard>=2.15.0
+
+# Gradient Boosting - nhánh ML của mô hình đề xuất.
+# XGBoost là nhánh champion; LightGBM và CatBoost dùng cho bảng so sánh baseline.
+# Ba gói này TRƯỚC ĐÂY BỊ THIẾU trong file này dù baselines_ml/ phụ thuộc trực tiếp.
+xgboost>=2.0.0
+lightgbm>=4.0.0
+catboost>=1.2
 
 # Scientific Computing & Data Processing
 numpy
 pandas
-scipy>=1.11.0
-scikit-learn>=1.3.0
+scipy>=1.11.0          # wilcoxon, norm - evaluation/stats_tests.py
+scikit-learn>=1.3.0    # MinMaxScaler
 openpyxl>=3.1.0
 
 # Data Visualization & Chart Plotting
@@ -24,7 +28,11 @@ seaborn>=0.12.0
 tqdm>=4.65.0
 PyYAML>=6.0.0
 
-# Interactive Notebooks (Jupyter Environment)
-Jupyter
-ipykernel
-notebook
+# Testing
+pytest>=7.0.0
+
+# ==============================================================================
+# ĐÃ LOẠI BỎ: tensorflow, keras, tensorboard, Jupyter, ipykernel, notebook
+# Không file .py nào trong repo import chúng (đã kiểm tra bằng grep). Trên Kaggle
+# việc cài lại tensorflow mất nhiều phút và có thể xung đột với bản dựng sẵn.
+# ==============================================================================

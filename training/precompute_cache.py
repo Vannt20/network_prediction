@@ -86,15 +86,31 @@ def compute_x_last(traffic_norm, seq_len):
 
 
 def get_champion_name(results_dir):
+    """Đọc mô hình ML champion từ results/champion_ml_model.json.
+
+    RAISE nếu thiếu file, KHÔNG rơi về mặc định. Trước đây hàm này trả 'lightgbm'
+    khi thiếu file, và đó là một cái bẫy im lặng: champion thật là 'xgboost', mọi
+    con số trong phần phân tích (SDN 5.509e-3, Abilene 2.763e-3, Géant 0.915e-3)
+    đều là XGBoost. Nếu file bị mất - chẳng hạn sau khi dọn results/ - thì cache
+    sẽ được dựng bằng LightGBM mà không có bất kỳ cảnh báo nào, và toàn bộ so sánh
+    trở nên vô nghĩa trong khi mọi thứ trông vẫn chạy bình thường.
+
+    File này do baselines_ml/run_ml_baselines.py sinh ra, nên phải chạy nhánh ML
+    trước khi dựng cache.
+    """
     json_path = os.path.join(results_dir, 'champion_ml_model.json')
-    if os.path.exists(json_path):
-        try:
-            with open(json_path, 'r', encoding='utf-8') as f:
-                info = json.load(f)
-                return info.get('champion_model', 'lightgbm')
-        except Exception:
-            pass
-    return 'lightgbm'
+    if not os.path.exists(json_path):
+        raise FileNotFoundError(
+            f"Không tìm thấy {json_path}. Hãy chạy nhánh ML trước:  "
+            f"python -m baselines_ml.run_ml_baselines --datasets all --runs 10  "
+            f"| Hoặc chỉ định tường minh: --champion xgboost"
+        )
+    with open(json_path, 'r', encoding='utf-8') as f:
+        info = json.load(f)
+    name = info.get('champion_model')
+    if not name:
+        raise ValueError(f"{json_path} không có trường 'champion_model'.")
+    return name
 
 
 def precompute_dataset_cache(dataset_name, runs=5, champion_name=None, quick_check=False):

@@ -101,7 +101,7 @@ def stage_branches(args):
             if subprocess.call(cmd) != 0:
                 raise RuntimeError(f"Huấn luyện {model}/{ds} thất bại.")
         cmd = [sys.executable, '-m', 'baselines_ml.run_ml_baselines',
-               '--dataset', ds, '--runs', str(args.runs)]
+               '--datasets', ds, '--runs', str(args.runs)]
         print(f"  $ {' '.join(cmd)}", flush=True)
         subprocess.call(cmd)
 
