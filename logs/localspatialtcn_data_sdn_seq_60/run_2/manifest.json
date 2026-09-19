@@ -10,7 +10,7 @@
   "k_lags": 15,
   "n_windows_val": 565,
   "n_windows_test": 1193,
-  "seed": 43,
+  "seed": 44,
   "git_commit": "febd911",
   "epochs": 200,
   "patience": 30,

@@ -11,7 +11,7 @@
   "n_windows_val": 565,
   "n_windows_test": 1193,
   "seed": 42,
-  "git_commit": "c5a370b",
+  "git_commit": "febd911",
   "epochs": 200,
   "patience": 30,
   "warmup_epochs": 15,
