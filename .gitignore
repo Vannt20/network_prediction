@@ -27,6 +27,9 @@ cache/
 # Ma trận OOF (Stage B) - cũng tái tạo được
 *_oof.pt
 
+# stdout của từng tiến trình khi chạy đa GPU (tools/run_multi_gpu.py)
+logs/_multigpu/
+
 # --- ĐƯỢC ĐƯA LÊN GIT (ghi ra đây cho rõ, không phải cú pháp ignore) ---
 # data/*.csv            133 MB - phải giống hệt nhau giữa các máy, vì csv_sha256
 #                       nằm trong manifest và quyết định artifact có gộp được không
