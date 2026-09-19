@@ -59,6 +59,39 @@ def split_runs(run_ids, n):
     return [[r for i, r in enumerate(run_ids) if i % n == g] for g in range(n)]
 
 
+def last_line(path, tail_bytes=8192):
+    """Dòng không rỗng cuối cùng của file, đọc từ đuôi để không tốn bộ nhớ."""
+    try:
+        size = os.path.getsize(path)
+        with open(path, 'rb') as f:
+            f.seek(max(0, size - tail_bytes))
+            chunk = f.read().decode('utf-8', errors='replace')
+    except Exception:
+        return ''
+    lines = [l.strip() for l in chunk.splitlines() if l.strip()]
+    return lines[-1] if lines else ''
+
+
+def monitor(running, every):
+    """In tiến độ định kỳ cho tới khi mọi tiến trình kết thúc.
+
+    stdout của từng tiến trình được ghi vào file riêng để hai luồng không trộn
+    vào nhau. Nhưng nếu CHỈ ghi file thì trên Kaggle bạn ngồi nhìn màn hình trống
+    hàng giờ, không biết tiến trình còn sống hay đã treo - và khi session bị ngắt
+    cũng không biết nó dừng ở đâu. Hàm này in dòng mới nhất của mỗi GPU, có nhãn.
+
+    `running`: danh sách (gpu_id, Popen, file_handle, run_ids, log_path).
+    """
+    last_shown = {}
+    while any(p.poll() is None for _, p, _, _, _ in running):
+        time.sleep(every)
+        for g, _p, _f, _ids, log_path in running:
+            line = last_line(log_path)
+            if line and line != last_shown.get(g):
+                last_shown[g] = line
+                print(f"  [GPU{g}] {line}", flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--dataset', required=True)
@@ -71,6 +104,8 @@ def main():
     ap.add_argument('--extra', default='',
                     help="Tham số truyền thẳng cho run_experiments.py, "
                          "ví dụ \"--epochs 300 --patience 30\"")
+    ap.add_argument('--progress_every', type=int, default=60,
+                    help="Giây giữa hai lần in tiến độ. 0 = tắt, chỉ ghi file.")
     a = ap.parse_args()
 
     run_ids = [int(x) for x in a.run_ids.split(',')]
@@ -109,16 +144,30 @@ def main():
         print(f"  $ CUDA_VISIBLE_DEVICES={g} {' '.join(cmd)}")
         print(f"    -> {out_path}")
         running.append((g, subprocess.Popen(cmd, env=env, stdout=out,
-                                            stderr=subprocess.STDOUT), out, ids))
+                                            stderr=subprocess.STDOUT), out, ids, out_path))
+
+    if a.progress_every > 0 and running:
+        print(f"\nTiến độ (cập nhật mỗi {a.progress_every}s; "
+              f"log đầy đủ trong {a.log_dir}):\n", flush=True)
+        monitor(running, a.progress_every)
 
     failed = []
-    for g, p, out, ids in running:
+    for g, p, out, ids, log_path in running:
         rc = p.wait()
         out.close()
         status = 'OK' if rc == 0 else f'LỖI (exit {rc})'
         print(f"  GPU {g} run {ids}: {status}")
         if rc != 0:
             failed.append((g, ids))
+            # In đuôi log của tiến trình hỏng ngay tại đây: trên Kaggle, session
+            # có thể kết thúc trước khi bạn kịp mở file log ra xem.
+            print(f"    --- 15 dòng cuối {log_path} ---")
+            try:
+                with open(log_path, encoding='utf-8', errors='replace') as fh:
+                    for line in fh.readlines()[-15:]:
+                        print(f"    {line.rstrip()}")
+            except Exception as e:
+                print(f"    (không đọc được log: {e})")
 
     print(f"\nTổng thời gian: {(time.time() - t0) / 60:.1f} phút")
     if failed:
