@@ -108,3 +108,101 @@ def test_convex_bi_chan_boi_nhanh_manh_nhat():
     best_single = min(mse(P[..., k]) for k in range(3))
     affine = mse(PFAROffline(1e-8).fit(P, y).predict(P))
     assert affine < best_single
+
+
+# ---------------------------------------------------------------------------
+# Nhánh ML: sửa crash XGBoost + lỗi B4 + manifest
+# ---------------------------------------------------------------------------
+
+def test_train_es_cat_dung_ranh_gioi_thoi_gian():
+    """Train-ES là đuôi THỜI GIAN và không chia đôi một bước thời gian.
+
+    Ma trận tabular xếp theo thời gian trước (hàng t*N + f). Cắt theo số hàng có
+    thể đẩy một phần luồng của cùng một bước sang tập early stopping.
+    """
+    from baselines_ml.es_split import split_train_es
+    N, T = 7, 100
+    X = np.repeat(np.arange(T), N)[:, None].astype(float)   # cột 0 = chỉ số thời gian
+    y = X[:, 0].copy()
+    Xf, yf, Xe, ye = split_train_es(X, y, N, es_frac=0.15)
+    assert len(Xf) % N == 0 and len(Xe) % N == 0
+    assert Xf[:, 0].max() < Xe[:, 0].min(), "tập early stopping phải nằm SAU tập khớp"
+    assert set(Xf[:, 0]).isdisjoint(set(Xe[:, 0])), "một bước thời gian bị chia đôi"
+    with pytest.raises(ValueError):
+        split_train_es(X[:-1], y[:-1], N)      # số hàng không chia hết cho N
+
+
+@pytest.mark.parametrize("m_key", ["lightgbm", "catboost", "xgboost"])
+def test_moi_mo_hinh_ml_nhan_fit_theo_vi_tri(m_key, tmp_path, monkeypatch):
+    """run_ml_baselines gọi fit(X_fit, y_fit, X_es, y_es) theo VỊ TRÍ.
+
+    Trước đây gọi fit(..., X_val=..., y_val=...) trong khi XGBoostBaseline.fit đã
+    đổi thành (X_es, y_es) -> TypeError, script sập ngay ở XGBoost, sau khi đã chạy
+    xong LightGBM và CatBoost. Test này bắt lỗi đó.
+    """
+    pytest.importorskip(m_key)
+    monkeypatch.chdir(tmp_path)                # CatBoost tự ghi catboost_info/ vào cwd
+    from baselines_ml.run_ml_baselines import get_model_instance
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(300, 4)).astype(np.float32)
+    y = (X[:, 0] * 2).astype(np.float32)
+    m = get_model_instance(m_key, seed=1, quick_check=True)
+    m.fit(X[:240], y[:240], X[240:], y[240:])
+    assert m.predict(X).shape == (300,)
+
+
+def test_model_config_khong_phu_thuoc_seed():
+    """Hai run khác seed phải có cùng model_config, nếu không verify_merge sẽ báo
+    lệch giả giữa các run hợp lệ."""
+    from baselines_ml.run_ml_baselines import get_model_instance, model_config_json
+    a = model_config_json('xgboost', get_model_instance('xgboost', seed=42), False)
+    b = model_config_json('xgboost', get_model_instance('xgboost', seed=51), False)
+    assert a == b
+    assert '"es_protocol": "train_tail_by_time"' in a
+
+
+def test_verify_merge_bat_run_chua_hoan_tat(tmp_path):
+    """Run có manifest nhưng không có test_metrics.csv = run bị ngắt giữa chừng.
+
+    Tình huống có thật: code cũ ghi manifest ngay lúc bắt đầu run, và 7 thư mục dở
+    dang như vậy đã bị push lên runs/A và runs/B. verify_merge phải chặn chúng, nếu
+    không precompute_cache sẽ nạp checkpoint mới train một nửa mà không báo gì.
+    """
+    import json as _json
+    from dataclasses import asdict
+    from tools.verify_merge import collect_log_manifests, check_group
+    mf = asdict(with_training_params(_mf(), epochs=200, patience=30, warmup_epochs=15,
+                                     lr=1e-3, weight_decay=1e-4))
+    base = tmp_path / 'stwaveformer_data_geant_seq_24'
+    for r, done in [(0, True), (1, True), (2, False)]:
+        d = base / f'run_{r}'
+        d.mkdir(parents=True)
+        (d / 'manifest.json').write_text(_json.dumps(dict(mf, seed=42 + r)), encoding='utf-8')
+        if done:
+            (d / 'test_metrics.csv').write_text('mse\n0.001\n', encoding='utf-8')
+    (label_items,) = collect_log_manifests(str(tmp_path)).values()
+    problems = check_group('g', label_items)
+    assert any('CHƯA HOÀN TẤT' in p and 'run_2' in p for p in problems)
+    assert not any('run_0' in p or 'run_1' in p for p in problems)
+
+
+def test_push_tu_dong_chi_lay_run_da_hoan_tat(tmp_path):
+    """Push tự động chỉ được đưa lên run đã hoàn tất (manifest + test_metrics).
+
+    Chạy trong lúc GPU kia vẫn đang train: checkpoint dở dang của nó (chỉ có
+    best_model.pth) và thư mục dở dang từ phiên bản cũ (manifest nhưng thiếu
+    test_metrics) đều KHÔNG được chọn.
+    """
+    from tools.push_run import completed_run_dirs
+    base = tmp_path / 'stwaveformer_data_geant_seq_24'
+    layout = {
+        'run_0': ['best_model.pth', 'test_metrics.csv', 'manifest.json'],   # xong
+        'run_1': ['best_model.pth'],                                         # đang train
+        'run_2': ['best_model.pth', 'manifest.json'],                        # dở, bản cũ
+    }
+    for run, files in layout.items():
+        (base / run).mkdir(parents=True)
+        for f in files:
+            (base / run / f).write_text('x', encoding='utf-8')
+    got = [d.rsplit('/', 1)[-1] for d in completed_run_dirs(str(tmp_path))]
+    assert got == ['run_0']
