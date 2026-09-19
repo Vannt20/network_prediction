@@ -1,0 +1,20 @@
+{
+  "pipeline_version": "v7",
+  "dataset": "sdn",
+  "csv_sha256": "54f4690ccd6e2844bc92a8f807225b320bba8b66f305139e3026a8838c3180e0",
+  "n_steps_after_hygiene": 6257,
+  "split_train": 4379,
+  "split_val": 625,
+  "split_test": 1253,
+  "seq_len": 60,
+  "k_lags": 15,
+  "n_windows_val": 565,
+  "n_windows_test": 1193,
+  "seed": 51,
+  "git_commit": "6765564",
+  "epochs": 200,
+  "patience": 30,
+  "warmup_epochs": 15,
+  "lr": 0.001,
+  "weight_decay": 0.0001
+}
