@@ -12,6 +12,7 @@ Agents/
 .draft/
 quytrinh/
 *.zip
+Claude/
 
 # --- Artifact NẶNG và TÁI TẠO ĐƯỢC: không đưa lên git ---
 # Dự đoán thô của từng run. v7 đã bỏ cơ chế nạp lại y_pred_data.npy trong
