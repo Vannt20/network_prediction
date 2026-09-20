@@ -40,3 +40,6 @@ catboost_info/
 # logs/**/manifest.json   chốt chặn chống lỗi B2 khi gộp từ nhiều nguồn
 # logs/**/gates.json      kết quả cổng nghiệm thu C1-C8
 # results/*.csv           bảng kết quả
+
+# Log tam khi chay baseline
+sdn_ml.log
