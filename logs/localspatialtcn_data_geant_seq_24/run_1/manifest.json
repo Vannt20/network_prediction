@@ -11,10 +11,11 @@
   "n_windows_val": 1052,
   "n_windows_test": 2131,
   "seed": 43,
-  "git_commit": "f2e6d7b",
+  "git_commit": "72d9931",
   "epochs": 200,
   "patience": 30,
   "warmup_epochs": 15,
   "lr": 0.001,
-  "weight_decay": 0.0001
+  "weight_decay": 0.0001,
+  "model_config": null
 }
