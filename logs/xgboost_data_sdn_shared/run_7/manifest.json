@@ -1,0 +1,21 @@
+{
+  "pipeline_version": "v7",
+  "dataset": "sdn",
+  "csv_sha256": "d117fdf8af48ab918d46266ea0c5e21242a3f73c70bcdc89c9d811982cb838a4",
+  "n_steps_after_hygiene": 6257,
+  "split_train": 4379,
+  "split_val": 625,
+  "split_test": 1253,
+  "seq_len": 60,
+  "k_lags": 15,
+  "n_windows_val": 565,
+  "n_windows_test": 1193,
+  "seed": 49,
+  "git_commit": "9df41fa",
+  "epochs": null,
+  "patience": null,
+  "warmup_epochs": null,
+  "lr": null,
+  "weight_decay": null,
+  "model_config": "{\"early_stopping_rounds\": 30, \"es_frac\": 0.15, \"es_protocol\": \"train_tail_by_time\", \"model\": \"xgboost\", \"params\": {\"colsample_bytree\": 0.8, \"device\": \"cpu\", \"learning_rate\": 0.05, \"max_depth\": 6, \"n_estimators\": 1000, \"objective\": \"reg:squarederror\", \"subsample\": 0.8, \"tree_method\": \"hist\"}, \"quick_check\": false}"
+}
