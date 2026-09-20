@@ -1,0 +1,21 @@
+{
+  "pipeline_version": "v7",
+  "dataset": "abilene",
+  "csv_sha256": "77bdf708ecee840525c97130c4d42644968fb613ad43dee7db53cf6d16cb0fbd",
+  "n_steps_after_hygiene": 47808,
+  "split_train": 33465,
+  "split_val": 4780,
+  "split_test": 9563,
+  "seq_len": 24,
+  "k_lags": 12,
+  "n_windows_val": 4756,
+  "n_windows_test": 9539,
+  "seed": 42,
+  "git_commit": "0bda6ee",
+  "epochs": 200,
+  "patience": 30,
+  "warmup_epochs": 15,
+  "lr": 0.001,
+  "weight_decay": 0.0001,
+  "model_config": null
+}
