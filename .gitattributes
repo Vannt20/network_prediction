@@ -1,0 +1,3 @@
+# CSV du lieu la artifact nhi phan: csv_sha256 trong manifest quyet dinh
+# artifact co gop duoc khong, nen tuyet doi khong chuyen doi dau dong.
+*.csv -text
