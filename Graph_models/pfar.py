@@ -79,12 +79,59 @@ def best_single_prior(P_fit: np.ndarray, y_fit: np.ndarray) -> np.ndarray:
     return prior
 
 
+def uniform_prior(P_fit: np.ndarray) -> np.ndarray:
+    """Dựng prior trung bình đều 1/K trên mọi nhánh, chệch bằng 0.
+
+    Vì sao cần, bên cạnh best_single_prior. Mỏ neo one-hot chỉ hợp lý khi nhánh đơn
+    lẻ tốt nhất thực sự là đích đáng co về. Đo trên kết quả 10 run của v7:
+
+        SDN     : nhánh tốt nhất 5.555e-3  <  trung bình 1/3  9.675e-3  -> one-hot đúng
+        Géant   : nhánh tốt nhất 0.918e-3  >  trung bình 1/3  0.738e-3  -> one-hot SAI
+        Abilene : nhánh tốt nhất 2.792e-3  >  trung bình 1/3  1.915e-3  -> one-hot SAI
+
+    Trên Géant/Abilene, rolling-origin chọn ridge = 10.0 (co rất mạnh) về đúng mỏ neo
+    tệ hơn, nên bộ gộp kẹt giữa hai giá trị (0.894 và 2.609) thay vì tiến về phía
+    trung bình. Không có prior đều thì cấu hình tốt nhất đã biết nằm NGOÀI họ nghiệm
+    mà bước chọn siêu tham số dò được - đúng kiểu thiếu sót mà best_single_prior sinh
+    ra để tránh, chỉ là trên một trục khác.
+
+    Khi d -> vô cùng, w -> prior, tức PFAR hội tụ đúng về trung bình cộng 1/K.
+    """
+    P_fit = np.asarray(P_fit, dtype=np.float64)
+    M, N, K = P_fit.shape
+    prior = np.zeros((N, K + 1), dtype=np.float64)
+    prior[:, :K] = 1.0 / float(K)
+    return prior
+
+
+PRIOR_KINDS = ('none', 'best_single', 'uniform')
+
+
+def make_prior(kind, P_fit: np.ndarray, y_fit: np.ndarray):
+    """Trả prior [N, K+1] theo `kind`, hoặc None khi không co về đâu cả.
+
+    Nhận cả bool để tương thích ngược với tham số shrink_to_best_single cũ:
+    True -> 'best_single', False -> 'none'.
+    """
+    if kind is True:
+        kind = 'best_single'
+    elif kind is False or kind is None:
+        kind = 'none'
+    if kind not in PRIOR_KINDS:
+        raise ValueError(f"prior không hợp lệ: {kind!r}. Chọn một trong {PRIOR_KINDS}.")
+    if kind == 'none':
+        return None
+    if kind == 'best_single':
+        return best_single_prior(P_fit, y_fit)
+    return uniform_prior(P_fit)
+
+
 class PFAROffline:
     """Chế độ tĩnh: khớp một lần trên ma trận OOF (hoặc Val nếu chưa có OOF)."""
 
-    def __init__(self, ridge: float = 1e-4, shrink_to_best_single: bool = True):
+    def __init__(self, ridge: float = 1e-4, prior: str = 'best_single'):
         self.ridge = float(ridge)
-        self.shrink_to_best_single = bool(shrink_to_best_single)
+        self.prior_kind = prior
         self.W = None       # [N, K+1]
         self.prior = None   # [N, K+1]
 
@@ -92,7 +139,7 @@ class PFAROffline:
         X = _design(P)
         y = np.asarray(y, dtype=np.float64)
         M = X.shape[0]
-        self.prior = best_single_prior(P, y) if self.shrink_to_best_single else None
+        self.prior = make_prior(self.prior_kind, P, y)
         S = np.einsum('mnk,mnl->nkl', X, X)
         c = np.einsum('mnk,mn->nk', X, y)
         self.W = _ridge_solve(S, c, float(M), self.ridge, self.prior)
@@ -119,11 +166,11 @@ class PFAROnline:
     """
 
     def __init__(self, ridge: float = 1e-4, lam: float = 0.999, anchor: float = 0.1,
-                 shrink_to_best_single: bool = True):
+                 prior: str = 'best_single'):
         self.ridge = float(ridge)
         self.lam = float(lam)
         self.anchor = float(anchor)
-        self.shrink_to_best_single = bool(shrink_to_best_single)
+        self.prior_kind = prior
 
     def run(self, P_fit: np.ndarray, y_fit: np.ndarray,
             P_stream: np.ndarray, y_stream: np.ndarray) -> np.ndarray:
@@ -142,7 +189,7 @@ class PFAROnline:
         c = np.einsum('mnk,mn->nk', Xf, yf)
         n = float(Xf.shape[0])
 
-        prior = best_single_prior(P_fit, yf) if self.shrink_to_best_single else None
+        prior = make_prior(self.prior_kind, P_fit, yf)
         w0 = _ridge_solve(S, c, n, self.ridge, prior)
         out = np.empty((M, N), dtype=np.float64)
 

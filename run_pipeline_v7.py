@@ -154,7 +154,9 @@ def stage_combine(args):
 
         summarize(rows, ds)
         df = pd.DataFrame(rows)
-        for k in ('ridge', 'lam', 'anchor'):
+        # 'prior' đi cùng: mỏ neo ridge được chọn khác nhau giữa các tập (SDN thiên
+        # về best_single, Géant/Abilene về uniform), nên phải ghi lại để báo cáo.
+        for k in ('ridge', 'lam', 'anchor', 'prior'):
             df[k] = [h[k] for h in hps]
         df.insert(0, 'run', range(len(df)))
         df.insert(0, 'dataset', ds)

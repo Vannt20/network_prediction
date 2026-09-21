@@ -46,6 +46,11 @@ def run_ablation(Pv, xv, cv, yv, Pt, xt, ct, yt, hp, P_oof=None, x_oof=None,
     rolling-origin trên khối Train+Val (không bao giờ trên Test).
     """
     ridge, lam, anchor = hp['ridge'], hp['lam'], hp['anchor']
+    # Mỏ neo ridge do rolling-origin chọn. Trước đây hp mang khoá
+    # 'shrink_to_best_single' nhưng KHÔNG được truyền xuống PFAR/TwoStageCombiner ở
+    # dưới, nên lựa chọn đó bị bỏ rơi và mọi cấu hình đều chạy bằng mặc định. Giờ
+    # truyền tường minh. Mặc định giữ 'best_single' cho hp cũ không có khoá này.
+    prior = hp.get('prior', 'best_single')
     out = {}
 
     out['A1'] = _mse(xt, yt)
@@ -56,18 +61,18 @@ def run_ablation(Pv, xv, cv, yv, Pt, xt, ct, yt, hp, P_oof=None, x_oof=None,
 
     single_v = Pv[..., [k_best]]
     single_t = Pt[..., [k_best]]
-    out['A3'] = _mse(PFAROffline(ridge).fit(single_v, yv).predict(single_t), yt)
+    out['A3'] = _mse(PFAROffline(ridge, prior=prior).fit(single_v, yv).predict(single_t), yt)
 
     out['A4'] = _mse(Pt.mean(axis=-1), yt)
     out['A5'] = _mse(softmax_pred, yt) if softmax_pred is not None else float('nan')
-    out['A6'] = _mse(PFAROffline(ridge).fit(Pv, yv).predict(Pt), yt)
+    out['A6'] = _mse(PFAROffline(ridge, prior=prior).fit(Pv, yv).predict(Pt), yt)
 
     if P_oof is not None:
-        out['A7'] = _mse(PFAROffline(ridge).fit(P_oof, y_oof).predict(Pt), yt)
+        out['A7'] = _mse(PFAROffline(ridge, prior=prior).fit(P_oof, y_oof).predict(Pt), yt)
     else:
         out['A7'] = float('nan')   # Stage B
 
-    out['A8'] = _mse(PFAROnline(ridge, lam, anchor).run(Pv, yv, Pt, yt), yt)
+    out['A8'] = _mse(PFAROnline(ridge, lam, anchor, prior=prior).run(Pv, yv, Pt, yt), yt)
 
     # Khối kiểm định cho cổng C7: nửa sau của khối khớp. Không bao giờ là Test.
     if P_oof is not None:
@@ -75,14 +80,14 @@ def run_ablation(Pv, xv, cv, yv, Pt, xt, ct, yt, hp, P_oof=None, x_oof=None,
     else:
         Pf, xf, cf, yf = Pv, xv, cv, yv
     h = len(Pf) // 2
-    comb = TwoStageCombiner(ridge, lam, anchor).fit(
+    comb = TwoStageCombiner(ridge, lam, anchor, prior=prior).fit(
         Pf[:h], xf[:h], cf[:h], yf[:h], Pf[h:], xf[h:], cf[h:], yf[h:])
     out['A9'] = _mse(comb.predict_online(Pf, xf, cf, yf, Pt, xt, ct, yt), yt)
     out['_c7_kept'] = bool(comb.c7_passed)
 
     # A10: bỏ hẳn hai nhánh học sâu khỏi bộ gộp.
     ml = [Pv.shape[-1] - 1]
-    comb_ml = TwoStageCombiner(ridge, lam, anchor).fit(
+    comb_ml = TwoStageCombiner(ridge, lam, anchor, prior=prior).fit(
         Pf[:h][..., ml], xf[:h], cf[:h], yf[:h], Pf[h:][..., ml], xf[h:], cf[h:], yf[h:])
     out['A10'] = _mse(comb_ml.predict_online(
         Pf[..., ml], xf, cf, yf, Pt[..., ml], xt, ct, yt), yt)
