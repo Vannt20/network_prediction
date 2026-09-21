@@ -94,10 +94,11 @@ class TwoStageCombiner:
     """
 
     def __init__(self, ridge=1e-4, lam=0.999, anchor=0.1, use_nonlinear=True,
-                 stacker_kwargs=None):
+                 stacker_kwargs=None, prior='best_single'):
         self.ridge = ridge
         self.lam = lam
         self.anchor = anchor
+        self.prior = prior
         self.use_nonlinear = use_nonlinear
         self.stacker_kwargs = stacker_kwargs or {}
         self.stacker = None
@@ -115,11 +116,12 @@ class TwoStageCombiner:
         s_sel = st.predict(P_sel, x_sel, ctx_sel)
 
         # So sánh trên khối kiểm định: có tầng phi tuyến vs PFAR affine thuần.
-        affine = PFAROffline(self.ridge).fit(P_fit, y_fit)
+        affine = PFAROffline(self.ridge, prior=self.prior).fit(P_fit, y_fit)
         mse_affine = _mse(affine.predict(P_sel), y_sel)
         aug_fit = np.concatenate([P_fit, st.predict(P_fit, x_fit, ctx_fit)[..., None]], axis=-1)
         aug_sel = np.concatenate([P_sel, s_sel[..., None]], axis=-1)
-        mse_two = _mse(PFAROffline(self.ridge).fit(aug_fit, y_fit).predict(aug_sel), y_sel)
+        mse_two = _mse(PFAROffline(self.ridge, prior=self.prior)
+                       .fit(aug_fit, y_fit).predict(aug_sel), y_sel)
 
         self.c7_detail = {'mse_affine_only': mse_affine, 'mse_two_stage': mse_two}
         # Yêu cầu cải thiện thực chất >=1%, tránh giữ một tầng chỉ vì nhiễu.
@@ -139,9 +141,10 @@ class TwoStageCombiner:
     def predict_static(self, P_fit, x_fit, ctx_fit, y_fit, P_te, x_te, ctx_te):
         A_fit = self._augment(P_fit, x_fit, ctx_fit)
         A_te = self._augment(P_te, x_te, ctx_te)
-        return PFAROffline(self.ridge).fit(A_fit, y_fit).predict(A_te)
+        return PFAROffline(self.ridge, prior=self.prior).fit(A_fit, y_fit).predict(A_te)
 
     def predict_online(self, P_fit, x_fit, ctx_fit, y_fit, P_te, x_te, ctx_te, y_te):
         A_fit = self._augment(P_fit, x_fit, ctx_fit)
         A_te = self._augment(P_te, x_te, ctx_te)
-        return PFAROnline(self.ridge, self.lam, self.anchor).run(A_fit, y_fit, A_te, y_te)
+        return PFAROnline(self.ridge, self.lam, self.anchor,
+                          prior=self.prior).run(A_fit, y_fit, A_te, y_te)

@@ -5,7 +5,7 @@ import pytest
 from features.manifest import (Manifest, assert_compatible, PIPELINE_VERSION,
                                with_training_params, TRAINING_KEYS)
 from Graph_models.pfar import PFAROffline, PFAROnline
-from training.train_pfar import rolling_origin_blocks
+from training.train_pfar import rolling_origin_blocks, select_hyperparams
 from training.build_oof import oof_plan
 
 
@@ -60,6 +60,86 @@ def test_pfar_khoi_phuc_he_so():
     y = 2.0 * P[..., 0] - 1.0 * P[..., 2] + 0.3
     W = PFAROffline(1e-10).fit(P, y).coef_
     assert np.allclose(W[0], [2.0, 0.0, -1.0, 0.3], atol=1e-4)
+
+
+def test_prior_hoi_tu_dung_mo_neo():
+    """ridge -> vô cùng thì w -> prior. Đây là bảo đảm cấu trúc của cổng C8.
+
+    Nếu tính chất này hỏng thì mỏ neo chỉ còn là gợi ý, và lập luận "nhánh đơn lẻ
+    tốt nhất luôn nằm trong họ nghiệm dò được" mất hiệu lực.
+    """
+    rng = np.random.default_rng(3)
+    y = rng.normal(size=(200, 5))
+    P = np.stack([y + 0.3 * rng.normal(size=(200, 5)),
+                  y + 0.9 * rng.normal(size=(200, 5)),
+                  y + 0.9 * rng.normal(size=(200, 5))], axis=-1)
+
+    got = PFAROffline(1e9, prior='best_single').fit(P, y).predict(P)
+    assert np.allclose(got, P[..., 0], atol=1e-6), "không hội tụ về nhánh tốt nhất"
+
+    got = PFAROffline(1e9, prior='uniform').fit(P, y).predict(P)
+    assert np.allclose(got, P.mean(axis=-1), atol=1e-6), "không hội tụ về trung bình 1/K"
+
+    got = PFAROffline(1e9, prior='none').fit(P, y).predict(P)
+    assert np.allclose(got, 0.0, atol=1e-6), "không hội tụ về 0"
+
+
+def test_prior_tuong_thich_bool_cu():
+    """Tham số cũ shrink_to_best_single là bool; hp cũ vẫn phải chạy đúng."""
+    rng = np.random.default_rng(4)
+    P, y = rng.normal(size=(120, 4, 3)), rng.normal(size=(120, 4))
+    f = lambda pr: PFAROffline(1e-3, prior=pr).fit(P, y).predict(P)
+    assert np.allclose(f(True), f('best_single'))
+    assert np.allclose(f(False), f('none'))
+    assert np.allclose(PFAROffline(1e-3).fit(P, y).predict(P), f('best_single'))
+    with pytest.raises(ValueError):
+        PFAROffline(1e-3, prior='khong_ton_tai').fit(P, y)
+
+
+def test_bo_chon_prior_theo_du_lieu():
+    """Mỏ neo phải do rolling-origin chọn, không ép cứng.
+
+    Đo trên 10 run v7: Géant/Abilene có trung bình 1/3 tốt hơn nhánh đơn lẻ tốt nhất
+    (0.738 vs 0.918; 1.915 vs 2.792) trong khi SDN thì ngược lại. Một mỏ neo cố định
+    không thể đúng cho cả ba.
+    """
+    rng = np.random.default_rng(7)
+    y = rng.normal(size=(400, 6))
+
+    # Ba nhánh nhiễu độc lập cùng độ mạnh -> trung bình thắng hẳn.
+    P = np.stack([y + 0.6 * rng.normal(size=(400, 6)) for _ in range(3)], axis=-1)
+    assert select_hyperparams(P, y, mode='online')['prior'] == 'uniform'
+
+    # Một nhánh gần như hoàn hảo -> nhánh đơn lẻ thắng.
+    P = np.stack([y + 0.05 * rng.normal(size=(400, 6)),
+                  y + 1.2 * rng.normal(size=(400, 6)),
+                  y + 1.2 * rng.normal(size=(400, 6))], axis=-1)
+    assert select_hyperparams(P, y, mode='online')['prior'] == 'best_single'
+
+
+def test_prior_den_duoc_bo_gop():
+    """hp['prior'] phải tới được PFAR bên trong TwoStageCombiner.
+
+    Bắt đúng lỗi đã có: hp mang 'shrink_to_best_single' nhưng TwoStageCombiner không
+    nhận tham số đó, nên lựa chọn bị bỏ rơi và mọi cấu hình chạy bằng mặc định.
+    """
+    from Graph_models.stacker import TwoStageCombiner
+    rng = np.random.default_rng(11)
+    y = rng.normal(size=(150, 4))
+    P = np.stack([y + 0.3 * rng.normal(size=(150, 4)),
+                  y + 0.9 * rng.normal(size=(150, 4)),
+                  y + 0.9 * rng.normal(size=(150, 4))], axis=-1)
+    x = P[..., 0]
+    c = np.zeros(P.shape[:2] + (2,), dtype=np.float32)
+
+    preds = {}
+    for pr in ('best_single', 'uniform'):
+        comb = TwoStageCombiner(1e9, 0.999, 0.1, use_nonlinear=False, prior=pr)
+        comb.fit(P, x, c, y, P, x, c, y)
+        preds[pr] = comb.predict_static(P, x, c, y, P, x, c)
+
+    assert np.allclose(preds['uniform'], P.mean(axis=-1), atol=1e-5),         "prior='uniform' không tới được PFAR bên trong bộ gộp"
+    assert not np.allclose(preds['best_single'], preds['uniform']),         "hai mỏ neo cho cùng kết quả - tham số đang bị bỏ rơi"
 
 
 def test_pfar_online_nhan_qua():

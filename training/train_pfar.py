@@ -44,7 +44,12 @@ ANCHOR_GRID = [0.0, 0.1, 0.3]
 # nhưng TỆ NHẤT trên Test (lỗi B4: XGBoost early-stop trên chính tập Val). Co về nó
 # là co về nhánh sai. Sau khi B4 được sửa (Train-ES, xem xgboost_baseline.py) thì
 # prior này đáng tin hơn, nhưng vẫn phải để rolling-origin tự chọn.
-SHRINK_GRID = [False, True]
+# Bổ sung 'uniform' (co về trung bình 1/K) sau khi đo 10 run của v7: trên Géant và
+# Abilene, trung bình 1/3 (0.738 và 1.915) TỐT HƠN nhánh đơn lẻ tốt nhất (0.918 và
+# 2.792), nên hai mỏ neo cũ đều trỏ sai chỗ và cấu hình tốt nhất đã biết nằm ngoài
+# họ nghiệm dò được. Không ép cứng: rolling-origin vẫn tự chọn, nên SDN - nơi nhánh
+# đơn lẻ tốt nhất thật sự thắng trung bình - giữ nguyên 'best_single'.
+PRIOR_GRID = ['none', 'best_single', 'uniform']
 
 
 def _mse(a, y):
@@ -80,26 +85,26 @@ def select_hyperparams(P_sel, y_sel, mode='online', n_origin=4, verbose=False):
     """
     blocks = rolling_origin_blocks(len(P_sel), n_origin=n_origin)
     if not blocks:
-        return {'ridge': 1e-4, 'lam': 0.999, 'anchor': 0.1, 'shrink_to_best_single': False}
+        return {'ridge': 1e-4, 'lam': 0.999, 'anchor': 0.1, 'prior': 'best_single'}
 
     lam_grid = LAM_GRID if mode == 'online' else [0.999]
     anchor_grid = ANCHOR_GRID if mode == 'online' else [0.1]
-    shrink_grid = SHRINK_GRID
+    prior_grid = PRIOR_GRID
 
     rows = []
     for ridge in RIDGE_GRID:
         for lam in lam_grid:
             for anchor in anchor_grid:
-                for shrink in shrink_grid:
+                for prior in prior_grid:
                     scores = []
                     for fit_idx, ev_idx in blocks:
                         Pf, yf = P_sel[fit_idx], y_sel[fit_idx]
                         Pe, ye = P_sel[ev_idx], y_sel[ev_idx]
                         try:
                             if mode == 'online':
-                                pred = PFAROnline(ridge, lam, anchor, shrink).run(Pf, yf, Pe, ye)
+                                pred = PFAROnline(ridge, lam, anchor, prior).run(Pf, yf, Pe, ye)
                             else:
-                                pred = PFAROffline(ridge, shrink).fit(Pf, yf).predict(Pe)
+                                pred = PFAROffline(ridge, prior).fit(Pf, yf).predict(Pe)
                         except np.linalg.LinAlgError:
                             scores.append(np.inf)
                             continue
@@ -107,7 +112,7 @@ def select_hyperparams(P_sel, y_sel, mode='online', n_origin=4, verbose=False):
                     scores = np.asarray(scores, dtype=np.float64)
                     se = float(scores.std(ddof=1) / np.sqrt(len(scores))) if len(scores) > 1 else 0.0
                     rows.append({'ridge': ridge, 'lam': lam, 'anchor': anchor,
-                                 'shrink_to_best_single': shrink,
+                                 'prior': prior,
                                  'mean': float(scores.mean()), 'se': se})
 
     # Quy tắc 1-SE: trong số các cấu hình có MSE <= (min + 1 sai số chuẩn), chọn cấu
@@ -127,10 +132,10 @@ def select_hyperparams(P_sel, y_sel, mode='online', n_origin=4, verbose=False):
     # phải "chính quy hoá mạnh hơn" và trên Géant nó đẩy kết quả từ 1.056 lên 1.576.
     within = [r for r in rows
               if r['mean'] <= thr and r['lam'] == best['lam'] and r['anchor'] == best['anchor']
-              and r['shrink_to_best_single'] == best['shrink_to_best_single']]
+              and r['prior'] == best['prior']]
     chosen = max(within, key=lambda r: r['ridge']) if within else best
     hp = {'ridge': chosen['ridge'], 'lam': chosen['lam'], 'anchor': chosen['anchor'],
-          'shrink_to_best_single': chosen['shrink_to_best_single']}
+          'prior': chosen['prior']}
     if verbose:
         print(f"      [PFAR] rolling-origin 1-SE chọn {hp} "
               f"(MSE {chosen['mean'] * 1e3:.4f}e-3; argmin {best['ridge']:g} -> "
@@ -152,7 +157,7 @@ def fit_and_evaluate(P_fit, x_fit, ctx_fit, y_fit,
         hp = select_hyperparams(P_sel, y_sel, mode='online')
 
     comb = TwoStageCombiner(ridge=hp['ridge'], lam=hp['lam'], anchor=hp['anchor'],
-                            use_nonlinear=use_nonlinear)
+                            use_nonlinear=use_nonlinear, prior=hp['prior'])
     comb.fit(P_fit, x_fit, ctx_fit, y_fit, P_sel, x_sel, ctx_sel, y_sel)
 
     static = comb.predict_static(P_fit, x_fit, ctx_fit, y_fit, P_te, x_te, ctx_te)
