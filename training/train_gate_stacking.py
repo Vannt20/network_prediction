@@ -31,8 +31,20 @@ from baselines_ml.metrics import calc_metrics_numpy
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+# Hàm mất mát của cổng. 'huber' (delta=0.01) là thiết kế NGUYÊN BẢN của
+# ST-Adaptive-Ensemble và được giữ làm mặc định. 'mse' là biến thể để so sánh
+# công bằng với PFAR: trên thang MinMax [0,1] sai số điển hình nhỏ hơn 0.01 nên
+# Huber(delta=0.01) gần như luôn ở vùng tuyến tính, tức thực chất tối ưu MAE trong
+# khi chỉ số báo cáo là MSE (lỗi B3, xem acceptance_gates.c4_loss_matches_metric).
+GATE_LOSSES = ('huber', 'mse')
+# Hậu tố tên thư mục / tệp kết quả, để hai biến thể không ghi đè lên nhau.
+_LOSS_SUFFIX = {'huber': ('', ''), 'mse': ('_mse', 'MSE')}
 
-def train_gate_for_run(dataset_name, run_id=0, epochs=100, lr=1e-3, lambda_entropy=0.001, logdir=None):
+
+def train_gate_for_run(dataset_name, run_id=0, epochs=100, lr=1e-3, lambda_entropy=0.001, logdir=None,
+                       loss='huber'):
+    if loss not in GATE_LOSSES:
+        raise ValueError(f"loss không hợp lệ: {loss!r}. Chọn một trong {GATE_LOSSES}.")
     ds_key = dataset_name.lower()
     cfg = DATASET_CONFIGS[ds_key]
     seq_len = cfg['seq_len']
@@ -95,19 +107,22 @@ def train_gate_for_run(dataset_name, run_id=0, epochs=100, lr=1e-3, lambda_entro
                  weights[:, :, 1] * y_l_val +
                  weights[:, :, 2] * y_m_val)
 
-        loss_huber = F.huber_loss(y_hat, y_real_val, delta=0.01)
+        if loss == 'mse':
+            loss_fit = F.mse_loss(y_hat, y_real_val)
+        else:
+            loss_fit = F.huber_loss(y_hat, y_real_val, delta=0.01)
         # Entropy regularization khuyến khích trọng số dứt khoát
         entropy = -torch.mean(torch.sum(weights * torch.log(weights + 1e-8), dim=-1))
-        loss = loss_huber + lambda_entropy * entropy
+        loss_total = loss_fit + lambda_entropy * entropy
 
         optimizer.zero_grad()
-        loss.backward()
+        loss_total.backward()
         torch.nn.utils.clip_grad_norm_(gate.parameters(), max_norm=1.0)
         optimizer.step()
         scheduler.step()
 
-        if loss.item() < best_loss:
-            best_loss = loss.item()
+        if loss_total.item() < best_loss:
+            best_loss = loss_total.item()
             best_state = {k: v.cpu().clone() for k, v in gate.state_dict().items()}
 
     train_time_s = time.perf_counter() - t0
@@ -142,10 +157,13 @@ def train_gate_for_run(dataset_name, run_id=0, epochs=100, lr=1e-3, lambda_entro
     metrics['mean_w_global'] = float(np.mean(w_test_np[:, :, 0]))
     metrics['mean_w_local'] = float(np.mean(w_test_np[:, :, 1]))
     metrics['mean_w_ml'] = float(np.mean(w_test_np[:, :, 2]))
+    metrics['gate_loss'] = loss
 
     # Lưu trữ checkpoint và logs
     if logdir is None:
-        logdir = os.path.join(parent_dir, 'logs', f"st_adaptive_ensemble_data_{ds_key}_seq_{seq_len}", f"run_{run_id}")
+        dir_sfx = _LOSS_SUFFIX[loss][0]
+        logdir = os.path.join(parent_dir, 'logs', f"st_adaptive_ensemble{dir_sfx}_data_{ds_key}_seq_{seq_len}",
+                              f"run_{run_id}")
     os.makedirs(logdir, exist_ok=True)
 
     with open(os.path.join(logdir, 'best_gate.pth'), 'wb') as f:
@@ -161,7 +179,7 @@ def train_gate_for_run(dataset_name, run_id=0, epochs=100, lr=1e-3, lambda_entro
     return metrics
 
 
-def train_all_gates(datasets=None, runs=5, epochs=100, lr=1e-3):
+def train_all_gates(datasets=None, runs=5, epochs=100, lr=1e-3, loss='huber'):
     if datasets is None or 'all' in datasets:
         datasets = ['sdn', 'geant', 'abilene']
 
@@ -170,7 +188,7 @@ def train_all_gates(datasets=None, runs=5, epochs=100, lr=1e-3):
 
     print("=" * 80)
     print(" HUẤN LUYỆN CỔNG ĐIỀU PHỐI ĐỘNG (TWO-STAGE STACKING GATE)")
-    print(f" Datasets: {datasets} | Runs: {runs} | Epochs: {epochs} | LR: {lr}")
+    print(f" Datasets: {datasets} | Runs: {runs} | Epochs: {epochs} | LR: {lr} | Loss: {loss}")
     print("=" * 80)
 
     for ds in datasets:
@@ -178,12 +196,13 @@ def train_all_gates(datasets=None, runs=5, epochs=100, lr=1e-3):
         run_metrics = []
         for r in range(runs):
             print(f"  [*] Huấn luyện Gate [Run {r+1}/{runs}]...")
-            m = train_gate_for_run(ds, run_id=r, epochs=epochs, lr=lr)
+            m = train_gate_for_run(ds, run_id=r, epochs=epochs, lr=lr, loss=loss)
             m['run'] = r
             run_metrics.append(m)
 
         df_runs = pd.DataFrame(run_metrics)
-        out_csv = os.path.join(results_dir, f"results_STAdaptiveEnsemble_data_{ds.lower()}.csv")
+        out_csv = os.path.join(results_dir,
+                               f"results_STAdaptiveEnsemble{_LOSS_SUFFIX[loss][1]}_data_{ds.lower()}.csv")
         df_runs.to_csv(out_csv, index=False)
 
         mean_mse = df_runs['mse'].mean()
@@ -198,7 +217,9 @@ if __name__ == '__main__':
     parser.add_argument('--runs', type=int, default=5, help="Số run độc lập (mặc định 5)")
     parser.add_argument('--epochs', type=int, default=100, help="Số epoch huấn luyện Gate (5-10s)")
     parser.add_argument('--lr', type=float, default=0.001, help="Tốc độ học")
+    parser.add_argument('--loss', type=str, default='huber', choices=list(GATE_LOSSES),
+                        help="huber = thiết kế nguyên bản (mặc định); mse = biến thể so sánh công bằng với PFAR")
 
     args = parser.parse_args()
     d_list = [d.strip() for d in args.datasets.split(',')] if args.datasets != 'all' else ['sdn', 'geant', 'abilene']
-    train_all_gates(datasets=d_list, runs=args.runs, epochs=args.epochs, lr=args.lr)
+    train_all_gates(datasets=d_list, runs=args.runs, epochs=args.epochs, lr=args.lr, loss=args.loss)
